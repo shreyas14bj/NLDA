@@ -1,13 +1,13 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
 ║          NLDA PRO · Natural Language Data Analyst                ║
-║          Ultimate Elite Edition — v3.1  (fully fixed)           ║
+║          Ultimate Elite Edition — v3.2                           ║
 ╚══════════════════════════════════════════════════════════════════╝
-Fixes in v3.1:
-  • API: reverted to Anthropic Claude (claude-sonnet-4-5), removed Gemini
-  • Sidebar toggle restored (CSS was hiding the collapse/expand arrow)
-  • Button text no longer overflows — switched from JetBrains Mono 11px
-    to Inter 12px, removed white-space:nowrap, tightened chip labels
+v3.2 — Multi-provider AI support:
+  • Anthropic Claude  (claude-sonnet-4-5 / haiku-4-5)
+  • Google Gemini     (gemini-2.0-flash  — FREE 1,500 req/day)
+  • Groq              (llama-3.3-70b     — FREE generous limits)
+  User picks provider + pastes their key — app auto-routes.
 """
 
 import streamlit as st
@@ -398,7 +398,11 @@ st.markdown(STYLE, unsafe_allow_html=True)
 # ═══════════════════════════════════════════════════════════════════
 _defaults = {
     "dataframes":{}, "df_meta":{}, "chat_history":[], "api_key":"",
-    "total_queries":0, "charts_generated":0, "pinned_charts":[], "query_tokens_used":0,
+    "total_queries":0, "charts_generated":0, "pinned_charts":[],
+    "query_tokens_used":0,
+    # v3.2 — multi-provider
+    "provider": "Groq (Free)",
+    "provider_key": "",
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -566,8 +570,16 @@ def generate_demo_datasets():
     return {"sales_data":sales, "marketing_data":mkt}
 
 # ═══════════════════════════════════════════════════════════════════
-#  ANTHROPIC CLAUDE API
+#  MULTI-PROVIDER AI  (v3.2)
+#  ┌─────────────────┬────────────────────────┬──────────────────┐
+#  │ Provider        │ Free tier              │ Get key at       │
+#  ├─────────────────┼────────────────────────┼──────────────────┤
+#  │ Anthropic Claude│ Paid ($5 min)          │ console.anthropic│
+#  │ Google Gemini   │ 1,500 req/day FREE     │ aistudio.google  │
+#  │ Groq            │ Generous daily FREE    │ console.groq.com │
+#  └─────────────────┴────────────────────────┴──────────────────┘
 # ═══════════════════════════════════════════════════════════════════
+
 SYSTEM_PROMPT = """You are NLDA Pro — an elite AI data analyst.
 
 Datasets:
@@ -595,28 +607,115 @@ Answer the user's question. Respond with ONLY a valid JSON object, no markdown f
 pandas_code rules: no file I/O, no subprocess, no __import__. kpis max 4. insights must use real numbers from data.
 """
 
-def call_claude(question, schemas, api_key, history):
+# ── Provider configs ──────────────────────────────────────────────
+PROVIDERS = {
+    "Groq (Free)": {
+        "label":       "Groq",
+        "model":       "llama-3.3-70b-versatile",
+        "url":         "https://api.groq.com/openai/v1/chat/completions",
+        "key_hint":    "gsk_…",
+        "key_url":     "https://console.groq.com",
+        "style":       "openai",   # uses OpenAI-compatible /chat/completions
+        "free":        True,
+        "badge_color": "#34d399",
+    },
+    "Gemini (Free)": {
+        "label":       "Gemini",
+        "model":       "gemini-2.0-flash",
+        "url":         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "key_hint":    "AIza…",
+        "key_url":     "https://aistudio.google.com",
+        "style":       "gemini",
+        "free":        True,
+        "badge_color": "#a78bfa",
+    },
+    "Anthropic Claude": {
+        "label":       "Claude",
+        "model":       "claude-sonnet-4-5",
+        "url":         "https://api.anthropic.com/v1/messages",
+        "key_hint":    "sk-ant-api03-…",
+        "key_url":     "https://console.anthropic.com",
+        "style":       "anthropic",
+        "free":        False,
+        "badge_color": "#f0c040",
+    },
+}
+
+def _parse_raw(raw: str) -> dict:
+    """Strip markdown fences and parse JSON; fallback to regex extraction."""
+    raw = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+    raw = re.sub(r'\s*```$', '', raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            return json.loads(m.group())
+        raise RuntimeError(f"Could not parse JSON from AI response:\n{raw[:500]}")
+
+def _call_openai_compat(url, api_key, model, system, question):
+    """OpenAI-compatible /chat/completions endpoint (used by Groq)."""
     import urllib.request, urllib.error
-
-    ctx = "\n".join(f"Q: {h['question']}\nA: {h.get('summary','')}" for h in history[-4:]) or "(none)"
-    system = SYSTEM_PROMPT.format(schemas=schemas, context=ctx)
-
     payload = json.dumps({
-        "model": "claude-sonnet-4-5",
-        "max_tokens": 3000,
-        "system": system,
-        "messages": [{"role":"user","content":question}]
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": question},
+        ],
+        "max_tokens":  3000,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
     }).encode()
+    req = urllib.request.Request(url, data=payload,
+                                 headers={"Content-Type": "application/json",
+                                          "Authorization": f"Bearer {api_key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raw_err = e.read().decode("utf-8", errors="replace")
+        try:    msg = json.loads(raw_err).get("error",{}).get("message", raw_err)
+        except: msg = raw_err
+        raise RuntimeError(f"Groq API error {e.code}: {msg}") from None
+    return body["choices"][0]["message"]["content"]
 
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=payload,
-        headers={
-            "Content-Type":"application/json",
-            "x-api-key":api_key,
-            "anthropic-version":"2023-06-01",
-        }
-    )
+def _call_gemini(url, api_key, system, question):
+    """Google Gemini generateContent endpoint."""
+    import urllib.request, urllib.error
+    full_url = f"{url}?key={api_key}"
+    full_prompt = f"{system}\n\nUser question: {question}"
+    payload = json.dumps({
+        "contents": [{"role":"user","parts":[{"text": full_prompt}]}],
+        "generationConfig": {"temperature":0.1, "maxOutputTokens":3000},
+    }).encode()
+    req = urllib.request.Request(full_url, data=payload,
+                                 headers={"Content-Type":"application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raw_err = e.read().decode("utf-8", errors="replace")
+        try:    msg = json.loads(raw_err).get("error",{}).get("message", raw_err)
+        except: msg = raw_err
+        raise RuntimeError(f"Gemini API error {e.code}: {msg}") from None
+    try:
+        return body["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        raise RuntimeError(f"Unexpected Gemini response: {str(body)[:300]}")
+
+def _call_anthropic(url, api_key, model, system, question):
+    """Anthropic /v1/messages endpoint."""
+    import urllib.request, urllib.error
+    payload = json.dumps({
+        "model":      model,
+        "max_tokens": 3000,
+        "system":     system,
+        "messages":   [{"role":"user","content":question}],
+    }).encode()
+    req = urllib.request.Request(url, data=payload,
+                                 headers={"Content-Type":"application/json",
+                                          "x-api-key": api_key,
+                                          "anthropic-version":"2023-06-01"})
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
             body = json.loads(resp.read())
@@ -625,16 +724,34 @@ def call_claude(question, schemas, api_key, history):
         try:    msg = json.loads(raw_err).get("error",{}).get("message", raw_err)
         except: msg = raw_err
         raise RuntimeError(f"Anthropic API error {e.code}: {msg}") from None
+    usage = body.get("usage",{})
+    st.session_state.query_tokens_used += usage.get("input_tokens",0) + usage.get("output_tokens",0)
+    return body["content"][0]["text"]
 
-    raw = body["content"][0]["text"].strip()
-    raw = re.sub(r'^```(?:json)?\s*', '', raw)
-    raw = re.sub(r'\s*```$', '', raw)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
-        if m: return json.loads(m.group())
-        raise RuntimeError(f"Could not parse JSON from response:\n{raw[:400]}")
+def call_ai(question: str, schemas: str, history: list) -> dict:
+    """Route to the selected provider and return parsed JSON result."""
+    provider_name = st.session_state.get("provider", "Groq (Free)")
+    api_key       = st.session_state.get("provider_key", "").strip()
+
+    if not api_key:
+        raise RuntimeError(
+            f"No API key entered. Add your {provider_name} key in the sidebar under Configuration."
+        )
+
+    cfg     = PROVIDERS[provider_name]
+    url     = cfg["url"]
+    model   = cfg["model"]
+    style   = cfg["style"]
+
+    ctx    = "\n".join(f"Q: {h['question']}\nA: {h.get('summary','')}" for h in history[-4:]) or "(none)"
+    system = SYSTEM_PROMPT.format(schemas=schemas, context=ctx)
+
+    if   style == "openai":    raw = _call_openai_compat(url, api_key, model, system, question)
+    elif style == "gemini":    raw = _call_gemini(url, api_key, system, question)
+    elif style == "anthropic": raw = _call_anthropic(url, api_key, model, system, question)
+    else: raise RuntimeError(f"Unknown provider style: {style}")
+
+    return _parse_raw(raw)
 
 def safe_exec(code, dfs):
     env = {"pd":pd,"np":np,"datetime":datetime,
@@ -691,18 +808,55 @@ with st.sidebar:
     <div class="nlda-logo-bar">
         <span class="nlda-logo-hex">⬡</span>
         <span class="nlda-logo-name">NLDA Pro</span>
-        <span class="nlda-logo-tag">Elite Data Intelligence · v3.1</span>
+        <span class="nlda-logo-tag">Elite Data Intelligence · v3.2</span>
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="sb-section">Configuration</div>', unsafe_allow_html=True)
-    key_in = st.text_input("Anthropic API Key", type="password",
-                           value=st.session_state.api_key,
-                           placeholder="sk-ant-api03-…",
-                           help="Get your key at console.anthropic.com · Free tier available")
-    if key_in:
-        st.session_state.api_key = key_in
 
-    st.selectbox("Model", ["claude-sonnet-4-5 (recommended)","claude-haiku-4-5 (faster/cheaper)"], index=0)
+    # Provider selector
+    provider = st.selectbox(
+        "AI Provider",
+        list(PROVIDERS.keys()),
+        index=list(PROVIDERS.keys()).index(st.session_state.get("provider","Groq (Free)")),
+        key="provider_select",
+        help="Groq & Gemini are FREE. Anthropic requires paid credits."
+    )
+    st.session_state["provider"] = provider
+    cfg = PROVIDERS[provider]
+
+    # Free badge
+    badge_color = cfg["badge_color"]
+    free_label  = "● FREE tier" if cfg["free"] else "● Paid — requires credits"
+    st.markdown(
+        f'<div style="font-family:var(--font-mono);font-size:10px;color:{badge_color};'
+        f'padding:2px 0 8px 2px">{free_label}</div>',
+        unsafe_allow_html=True
+    )
+
+    # Model display
+    st.markdown(
+        f'<div style="font-family:var(--font-mono);font-size:10px;color:var(--text-3);'
+        f'padding:0 0 6px 2px">Model: {cfg["model"]}</div>',
+        unsafe_allow_html=True
+    )
+
+    # API key input — label + link changes per provider
+    key_val = st.text_input(
+        f"{cfg['label']} API Key",
+        type="password",
+        value=st.session_state.get("provider_key",""),
+        placeholder=cfg["key_hint"],
+        help=f"Get a free key at {cfg['key_url']}"
+    )
+    if key_val:
+        st.session_state["provider_key"] = key_val
+
+    st.markdown(
+        f'<div style="font-size:11px;color:var(--text-3);padding:2px 0 4px">'
+        f'🔑 Get key → <a href="{cfg["key_url"]}" target="_blank" '
+        f'style="color:var(--gold)">{cfg["key_url"].replace("https://","")}</a></div>',
+        unsafe_allow_html=True
+    )
 
     st.markdown('<div class="sb-section">Session Metrics</div>', unsafe_allow_html=True)
     total_rows = sum(len(d) for d in st.session_state.dataframes.values())
@@ -780,7 +934,7 @@ st.markdown("""
     <h1 class="hero-title">Ask anything.<br><span>Understand everything.</span></h1>
     <p class="hero-sub">Upload your data, ask in plain English — get SQL, executable code, interactive charts, and expert-level insights instantly.</p>
     <div class="hero-badges">
-        <div class="hero-badge"><div class="dot" style="background:#34d399"></div>Claude Sonnet 4.5</div>
+        <div class="hero-badge"><div class="dot" style="background:#34d399"></div>Groq · Gemini · Claude</div>
         <div class="hero-badge"><div class="dot" style="background:#f0c040"></div>Multi-table</div>
         <div class="hero-badge"><div class="dot" style="background:#a78bfa"></div>10 chart types</div>
         <div class="hero-badge"><div class="dot" style="background:#22d3ee"></div>PDF export</div>
@@ -999,14 +1153,19 @@ st.markdown('</div>', unsafe_allow_html=True)
 #  ANALYSIS ENGINE
 # ═══════════════════════════════════════════════════════════════════
 if run and query.strip():
-    if not st.session_state.api_key:
-        st.error("⚠ Please enter your Anthropic API key in the sidebar.  "
-                 "Get a free key at [console.anthropic.com](https://console.anthropic.com)")
+    if not st.session_state.get("provider_key","").strip():
+        pname = st.session_state.get("provider","Groq (Free)")
+        cfg   = PROVIDERS[pname]
+        st.error(
+            f"⚠ No API key entered for **{pname}**. "
+            f"Get a free key at [{cfg['key_url']}]({cfg['key_url']}) "
+            f"and paste it in the sidebar under Configuration."
+        )
         st.stop()
 
     schemas = "\n\n".join(df_schema_str(df,n) for n,df in st.session_state.dataframes.items())
     prog    = st.empty()
-    STEPS   = ["PARSE","CLAUDE","EXECUTE","VISUALIZE"]
+    STEPS   = ["PARSE","AI CALL","EXECUTE","VISUALIZE"]
 
     def show_step(active):
         items = ""
@@ -1019,10 +1178,10 @@ if run and query.strip():
         prog.markdown(f'<div class="step-track">{items}</div>', unsafe_allow_html=True)
 
     show_step("PARSE")
-    show_step("CLAUDE")
+    show_step("AI CALL")
 
     try:
-        result = call_claude(query.strip(), schemas, st.session_state.api_key, st.session_state.chat_history)
+        result = call_ai(query.strip(), schemas, st.session_state.chat_history)
     except RuntimeError as e:
         prog.empty(); st.error(str(e)); st.stop()
     except json.JSONDecodeError as e:
