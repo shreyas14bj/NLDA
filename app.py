@@ -1041,7 +1041,7 @@ def call_claude(question: str, schemas: str, api_key: str, history: list) -> dic
         context=ctx_str
     )
     payload = json.dumps({
-        "model": "claude-sonnet-4-5",
+        "model": "claude-haiku-4-5",
         "max_tokens": 3000,
         "system": system,
         "messages": [{"role": "user", "content": question}]
@@ -1295,7 +1295,7 @@ with st.sidebar:
             st.session_state.api_key = api_key_input
 
     # Model selector (display only — always Sonnet 4)
-    st.selectbox("Model", ["claude-sonnet-4-5 (recommended)", "claude-opus-4-5"], index=0)
+    st.selectbox("Model", ["claude-haiku-4-5 (free tier)", "claude-sonnet-4-5 (paid)", "claude-opus-4-5 (paid)"], index=0)
 
     # Stats strip
     st.markdown('<div class="sb-section">Session Metrics</div>', unsafe_allow_html=True)
