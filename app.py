@@ -653,80 +653,115 @@ def _parse_raw(raw: str) -> dict:
             return json.loads(m.group())
         raise RuntimeError(f"Could not parse JSON from AI response:\n{raw[:500]}")
 
-def _call_openai_compat(url, api_key, model, system, question):
-    """OpenAI-compatible /chat/completions endpoint (used by Groq)."""
-    import urllib.request, urllib.error
-    payload = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": question},
-        ],
-        "max_tokens":  3000,
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }).encode()
-    req = urllib.request.Request(url, data=payload,
-                                 headers={"Content-Type": "application/json",
-                                          "Authorization": f"Bearer {api_key}"})
+def _http_post(url: str, headers: dict, payload: dict) -> dict:
+    """
+    Robust HTTP POST using http.client instead of urllib.
+    - Encodes payload as UTF-8 JSON bytes
+    - Encodes every header value as ASCII (safe for API keys)
+    - Handles both HTTPS and HTTP
+    - Returns parsed JSON body or raises RuntimeError with the error message
+    """
+    import http.client, urllib.parse, ssl
+
+    body_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    # Sanitize headers: encode to ASCII bytes then back to str so http.client
+    # never sees non-latin-1 characters (the root cause of the encoding error)
+    safe_headers = {}
+    for k, v in headers.items():
+        safe_headers[str(k)] = str(v).encode("ascii", errors="replace").decode("ascii")
+    safe_headers["Content-Type"]   = "application/json; charset=utf-8"
+    safe_headers["Content-Length"] = str(len(body_bytes))
+
+    parsed    = urllib.parse.urlparse(url)
+    host      = parsed.netloc
+    path      = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    use_https = parsed.scheme == "https"
+
+    ctx  = ssl.create_default_context()
+    conn = http.client.HTTPSConnection(host, timeout=90, context=ctx) if use_https \
+           else http.client.HTTPConnection(host, timeout=90)
+
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raw_err = e.read().decode("utf-8", errors="replace")
-        try:    msg = json.loads(raw_err).get("error",{}).get("message", raw_err)
-        except: msg = raw_err
-        raise RuntimeError(f"Groq API error {e.code}: {msg}") from None
-    return body["choices"][0]["message"]["content"]
+        conn.request("POST", path, body=body_bytes, headers=safe_headers)
+        resp      = conn.getresponse()
+        resp_body = resp.read().decode("utf-8", errors="replace")
+    finally:
+        conn.close()
+
+    try:
+        data = json.loads(resp_body)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"HTTP {resp.status}: non-JSON response — {resp_body[:300]}")
+
+    if resp.status not in (200, 201):
+        # Extract a human-readable error message
+        msg = (data.get("error", {}).get("message")
+               or data.get("error", {})
+               or data.get("message")
+               or resp_body[:400])
+        raise RuntimeError(f"API error {resp.status}: {msg}")
+
+    return data
+
+
+def _call_openai_compat(url, api_key, model, system, question):
+    """OpenAI-compatible /chat/completions (Groq, OpenAI, etc.)."""
+    data = _http_post(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        payload={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": question},
+            ],
+            "max_tokens":  3000,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        }
+    )
+    return data["choices"][0]["message"]["content"]
+
 
 def _call_gemini(url, api_key, system, question):
     """Google Gemini generateContent endpoint."""
-    import urllib.request, urllib.error
-    full_url = f"{url}?key={api_key}"
-    full_prompt = f"{system}\n\nUser question: {question}"
-    payload = json.dumps({
-        "contents": [{"role":"user","parts":[{"text": full_prompt}]}],
-        "generationConfig": {"temperature":0.1, "maxOutputTokens":3000},
-    }).encode()
-    req = urllib.request.Request(full_url, data=payload,
-                                 headers={"Content-Type":"application/json"})
+    full_url    = f"{url}?key={api_key}"
+    full_prompt = f"{system}\n\nUser question: {question}\n\nRespond with ONLY a valid JSON object."
+    data = _http_post(
+        full_url,
+        headers={},
+        payload={
+            "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 3000},
+        }
+    )
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raw_err = e.read().decode("utf-8", errors="replace")
-        try:    msg = json.loads(raw_err).get("error",{}).get("message", raw_err)
-        except: msg = raw_err
-        raise RuntimeError(f"Gemini API error {e.code}: {msg}") from None
-    try:
-        return body["candidates"][0]["content"]["parts"][0]["text"]
+        return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError):
-        raise RuntimeError(f"Unexpected Gemini response: {str(body)[:300]}")
+        raise RuntimeError(f"Unexpected Gemini response format: {str(data)[:300]}")
+
 
 def _call_anthropic(url, api_key, model, system, question):
     """Anthropic /v1/messages endpoint."""
-    import urllib.request, urllib.error
-    payload = json.dumps({
-        "model":      model,
-        "max_tokens": 3000,
-        "system":     system,
-        "messages":   [{"role":"user","content":question}],
-    }).encode()
-    req = urllib.request.Request(url, data=payload,
-                                 headers={"Content-Type":"application/json",
-                                          "x-api-key": api_key,
-                                          "anthropic-version":"2023-06-01"})
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raw_err = e.read().decode("utf-8", errors="replace")
-        try:    msg = json.loads(raw_err).get("error",{}).get("message", raw_err)
-        except: msg = raw_err
-        raise RuntimeError(f"Anthropic API error {e.code}: {msg}") from None
-    usage = body.get("usage",{})
-    st.session_state.query_tokens_used += usage.get("input_tokens",0) + usage.get("output_tokens",0)
-    return body["content"][0]["text"]
+    data = _http_post(
+        url,
+        headers={
+            "x-api-key":          api_key,
+            "anthropic-version":  "2023-06-01",
+        },
+        payload={
+            "model":      model,
+            "max_tokens": 3000,
+            "system":     system,
+            "messages":   [{"role": "user", "content": question}],
+        }
+    )
+    usage = data.get("usage", {})
+    st.session_state.query_tokens_used += (
+        usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+    )
+    return data["content"][0]["text"]
 
 def call_ai(question: str, schemas: str, history: list) -> dict:
     """Route to the selected provider and return parsed JSON result."""
