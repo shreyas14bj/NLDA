@@ -1220,8 +1220,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────
 st.markdown("""<div class="hero">
     <div class="hero-grid"></div><div class="hero-glow"></div><div class="hero-glow2"></div><div class="hero-glow3"></div>
-    <div class="hero-eye">Elite Data Intelligence Platform · v5.0</div>
-    <h1 class="hero-title">Your data has<br><span>a story to tell.</span></h1>
+    <div class="hero-eye">Elite Data Intelligence Platform ·</div>
+    <h1 class="hero-title">Ask anything.<br><span>Understand everything.</span></h1>
     <p class="hero-sub">Ask anything in plain English. Get charts, insights, per-query narratives, AI data stories, and professional PDF reports — all in seconds.</p>
     <div class="hero-badges">
         <div class="hb"><div class="dot" style="background:#34d399"></div>25+ chart types</div>
