@@ -1026,6 +1026,7 @@ Rules:
 
 def call_claude(question: str, schemas: str, api_key: str, history: list) -> dict:
     import urllib.request
+    import urllib.error
 
     # Build context string from recent history
     ctx_items = history[-4:] if len(history) > 4 else history
@@ -1040,7 +1041,7 @@ def call_claude(question: str, schemas: str, api_key: str, history: list) -> dic
         context=ctx_str
     )
     payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-5",
         "max_tokens": 3000,
         "system": system,
         "messages": [{"role": "user", "content": question}]
@@ -1055,15 +1056,25 @@ def call_claude(question: str, schemas: str, api_key: str, history: list) -> dic
             "anthropic-version": "2023-06-01",
         }
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        body = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # Read the actual error body from Anthropic for a clear message
+        error_body = e.read().decode("utf-8", errors="replace")
+        try:
+            error_json = json.loads(error_body)
+            msg = error_json.get("error", {}).get("message", error_body)
+        except Exception:
+            msg = error_body
+        raise RuntimeError(f"Anthropic API error {e.code}: {msg}") from None
 
     raw = body["content"][0]["text"].strip()
     raw = re.sub(r'^```(?:json)?\s*', '', raw)
     raw = re.sub(r'\s*```$', '', raw)
     result = json.loads(raw)
 
-    # Token accounting (approximate)
+    # Token accounting
     usage = body.get("usage", {})
     st.session_state.query_tokens_used += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
     return result
@@ -1284,7 +1295,7 @@ with st.sidebar:
             st.session_state.api_key = api_key_input
 
     # Model selector (display only — always Sonnet 4)
-    st.selectbox("Model", ["claude-sonnet-4 (recommended)", "claude-opus-4"], index=0)
+    st.selectbox("Model", ["claude-sonnet-4-5 (recommended)", "claude-opus-4-5"], index=0)
 
     # Stats strip
     st.markdown('<div class="sb-section">Session Metrics</div>', unsafe_allow_html=True)
@@ -1780,12 +1791,16 @@ if run and query.strip():
         result = call_claude(query.strip(), schemas, st.session_state.api_key,
                              st.session_state.chat_history)
     except json.JSONDecodeError as e:
-        st.error(f"JSON parse error — Claude returned malformed JSON. Try rephrasing. ({e})")
         progress_placeholder.empty()
+        st.error(f"**JSON parse error** — Claude returned malformed JSON. Try rephrasing your question. ({e})")
+        st.stop()
+    except RuntimeError as e:
+        progress_placeholder.empty()
+        st.error(f"**{e}**")
         st.stop()
     except Exception as e:
-        st.error(f"API error: {e}")
         progress_placeholder.empty()
+        st.error(f"**Unexpected error:** {e}")
         st.stop()
 
     # Step 2: Execute code
