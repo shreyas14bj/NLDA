@@ -1,0 +1,20 @@
+# NLDA Pro · Elite Edition — Python Dependencies
+
+# ── Core ──────────────────────────────────────────────────────────
+streamlit>=1.35.0
+pandas>=2.1.0
+numpy>=1.26.0
+openpyxl>=3.1.2          # Excel read/write
+xlrd>=2.0.1              # Legacy .xls
+
+# ── AI ────────────────────────────────────────────────────────────
+anthropic>=0.28.0
+
+# ── Visualization ─────────────────────────────────────────────────
+plotly>=5.21.0
+
+# ── Data / Stats ──────────────────────────────────────────────────
+scipy>=1.13.0
+
+# ── Export ────────────────────────────────────────────────────────
+reportlab>=4.2.0          # PDF export (optional but recommended)
