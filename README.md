@@ -1,5 +1,5 @@
 # ⬡ NLDA Pro — Natural Language Data Analyst
-### Ultimate Elite Edition · v3.0
+### Ultimate Elite Edition
 
 > **Upload data → ask anything in plain English → get SQL, code, interactive charts, KPIs, and expert insights in seconds.**
 
