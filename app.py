@@ -1025,6 +1025,10 @@ Rules:
 """
 
 def call_claude(question: str, schemas: str, api_key: str, history: list) -> dict:
+    """
+    Calls Google Gemini API (free tier: 15 req/min, 1500 req/day).
+    Get a free key at https://aistudio.google.com → Get API Key
+    """
     import urllib.request
     import urllib.error
 
@@ -1040,43 +1044,61 @@ def call_claude(question: str, schemas: str, api_key: str, history: list) -> dic
         n_ctx=len(ctx_items),
         context=ctx_str
     )
+
+    # Gemini API payload — system prompt goes as first user turn
+    full_prompt = f"{system}\n\nUser question: {question}"
+
     payload = json.dumps({
-        "model": "claude-haiku-4-5",
-        "max_tokens": 3000,
-        "system": system,
-        "messages": [{"role": "user", "content": question}]
+        "contents": [
+            {"role": "user", "parts": [{"text": full_prompt}]}
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 3000,
+        }
     }).encode()
 
+    model = "gemini-2.0-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        url,
         data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        }
+        headers={"Content-Type": "application/json"}
     )
+
     try:
         with urllib.request.urlopen(req, timeout=90) as resp:
             body = json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        # Read the actual error body from Anthropic for a clear message
         error_body = e.read().decode("utf-8", errors="replace")
         try:
             error_json = json.loads(error_body)
             msg = error_json.get("error", {}).get("message", error_body)
         except Exception:
             msg = error_body
-        raise RuntimeError(f"Anthropic API error {e.code}: {msg}") from None
+        raise RuntimeError(f"Gemini API error {e.code}: {msg}") from None
 
-    raw = body["content"][0]["text"].strip()
+    # Extract text from Gemini response
+    try:
+        raw = body["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError) as e:
+        raise RuntimeError(f"Unexpected Gemini response format: {body}") from None
+
+    # Strip markdown fences if present
     raw = re.sub(r'^```(?:json)?\s*', '', raw)
     raw = re.sub(r'\s*```$', '', raw)
-    result = json.loads(raw)
 
-    # Token accounting
-    usage = body.get("usage", {})
-    st.session_state.query_tokens_used += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try to extract JSON object from response
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            result = json.loads(match.group())
+        else:
+            raise RuntimeError(f"Could not parse JSON from response: {raw[:300]}")
+
     return result
 
 def safe_exec(code: str, dfs: dict) -> tuple[pd.DataFrame | None, str | None]:
@@ -1285,17 +1307,17 @@ with st.sidebar:
     st.markdown('<div class="sb-section">Configuration</div>', unsafe_allow_html=True)
     with st.container():
         api_key_input = st.text_input(
-            "Anthropic API Key",
+            "Google Gemini API Key",
             type="password",
             value=st.session_state.api_key,
-            placeholder="sk-ant-api03-…",
-            help="Your key is stored only in this session"
+            placeholder="AIza... (free at aistudio.google.com)",
+            help="Free key — get it at aistudio.google.com → Get API Key"
         )
         if api_key_input:
             st.session_state.api_key = api_key_input
 
     # Model selector (display only — always Sonnet 4)
-    st.selectbox("Model", ["claude-haiku-4-5 (free tier)", "claude-sonnet-4-5 (paid)", "claude-opus-4-5 (paid)"], index=0)
+    st.selectbox("Model", ["gemini-2.0-flash (free)", "gemini-1.5-flash (free)", "gemini-1.5-pro (free)"], index=0)
 
     # Stats strip
     st.markdown('<div class="sb-section">Session Metrics</div>', unsafe_allow_html=True)
@@ -1419,7 +1441,7 @@ st.markdown(f"""
         interactive charts, and expert-level insights in seconds.
     </p>
     <div class="hero-badges">
-        <div class="hero-badge"><div class="dot" style="background:#34d399"></div>Claude Sonnet 4</div>
+        <div class="hero-badge"><div class="dot" style="background:#34d399"></div>Gemini 2.0 Flash (Free)</div>
         <div class="hero-badge"><div class="dot" style="background:#f0c040"></div>Multi-table joins</div>
         <div class="hero-badge"><div class="dot" style="background:#a78bfa"></div>8 chart types</div>
         <div class="hero-badge"><div class="dot" style="background:#22d3ee"></div>PDF export</div>
@@ -1749,7 +1771,7 @@ st.markdown('</div>', unsafe_allow_html=True)  # close query-wrap
 # ═══════════════════════════════════════════════════════════════════
 if run and query.strip():
     if not st.session_state.api_key:
-        st.error("⚠ Please add your Anthropic API key in the sidebar.")
+        st.error("⚠ Please add your Google Gemini API key in the sidebar. Get one free at aistudio.google.com")
         st.stop()
 
     schemas = "\n\n".join(
