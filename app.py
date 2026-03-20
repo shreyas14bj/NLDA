@@ -696,106 +696,182 @@ def make_multi_chart_dashboard(df):
     return figs
 
 # ══════════════════════════════════════════════════════════════════════
-#  PDF EXPORT  — v4.1: includes summary, KPIs, insights, SQL per entry
+#  PDF EXPORT  — v4.1 fixed: correct ReportLab API, no silent swallow
 # ══════════════════════════════════════════════════════════════════════
+def _safe_text(t):
+    """Sanitize text for ReportLab: escape XML chars, strip non-latin chars."""
+    if not isinstance(t, str): t = str(t)
+    t = t.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    # Replace problematic unicode that standard PDF fonts can't handle
+    t = t.replace("⚠","[!]").replace("⬡","[o]").replace("★","*").replace("◆","*")
+    t = t.replace("▲","^").replace("●","*").replace("◉","*").replace("✦","*")
+    t = t.replace("\u2019","'").replace("\u2018","'").replace("\u201c",'"').replace("\u201d",'"')
+    # Remove any remaining non-ASCII that could crash Latin-1 fonts
+    t = t.encode("latin-1", errors="replace").decode("latin-1")
+    return t
+
 def make_pdf(history):
+    """Generate PDF report. Returns bytes on success, raises RuntimeError on failure."""
     try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.lib import colors as rc
-        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                        HRFlowable, KeepTogether, Table, TableStyle)
-        buf=io.BytesIO()
-        doc=SimpleDocTemplate(buf,pagesize=A4,
-                              leftMargin=2.2*cm,rightMargin=2.2*cm,
-                              topMargin=2.2*cm,bottomMargin=2.2*cm)
-        sty=getSampleStyleSheet()
-        gold=rc.HexColor('#f0c040'); violet=rc.HexColor('#a78bfa')
-        muted=rc.HexColor('#64748b'); body_c=rc.HexColor('#cbd5e1')
-        bg_dark=rc.HexColor('#0e1117')
-
-        ts  =ParagraphStyle('T',  parent=sty['Title'],   fontSize=26,textColor=gold,   spaceAfter=2, fontName='Helvetica-Bold')
-        ss  =ParagraphStyle('S',  parent=sty['Normal'],  fontSize=10,textColor=muted,  spaceAfter=16)
-        h2s =ParagraphStyle('H2', parent=sty['Heading2'],fontSize=13,textColor=violet, spaceAfter=5, spaceBefore=14)
-        h3s =ParagraphStyle('H3', parent=sty['Heading3'],fontSize=11,textColor=gold,   spaceAfter=4, spaceBefore=8)
-        bs  =ParagraphStyle('B',  parent=sty['Normal'],  fontSize=10,textColor=body_c, leading=15,  spaceAfter=4)
-        ms  =ParagraphStyle('M',  parent=sty['Normal'],  fontSize=8, textColor=rc.HexColor('#94a3b8'),fontName='Courier',leading=12,spaceAfter=3)
-        bus =ParagraphStyle('BU', parent=sty['Normal'],  fontSize=10,textColor=body_c, leading=14,  spaceAfter=3,leftIndent=12)
-        anom=ParagraphStyle('AN', parent=sty['Normal'],  fontSize=10,textColor=rc.HexColor('#fb7185'),leading=14,spaceAfter=3,leftIndent=12)
-
-        T=lambda t,s: Paragraph(str(t).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;"),s)
-
-        story=[
-            T("NLDA Pro",ts),
-            T(f"Data Intelligence Report · {datetime.now().strftime('%A, %d %B %Y · %H:%M')}",ss),
-            T(f"Total analyses: {len(history)}",ss),
-            HRFlowable(width="100%",thickness=1,color=gold,spaceAfter=14),
-            Spacer(1,.4*cm),
-        ]
-
-        for i,e in enumerate(history,1):
-            items=[]
-            items.append(T(f"Analysis {i} — {e.get('ts','')}",h2s))
-            items.append(T(f"<b>Question:</b> {e.get('question','')}",bs))
-            items.append(T(f"<b>Summary:</b> {e.get('summary','No summary available.')}",bs))
-            items.append(T(f"<b>Confidence:</b> {e.get('confidence','—').upper()}",bs))
-
-            # KPIs table
-            kpis=e.get("kpis",[])
-            if kpis:
-                items.append(T("Key Metrics",h3s))
-                kpi_data=[["Metric","Value"]]
-                for kpi in kpis:
-                    kpi_data.append([kpi.get("label",""),kpi.get("value","")])
-                t=Table(kpi_data,colWidths=[8*cm,5*cm])
-                t.setStyle(TableStyle([
-                    ('BACKGROUND',(0,0),(-1,0),violet),
-                    ('TEXTCOLOR',(0,0),(-1,0),rc.white),
-                    ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                    ('FONTSIZE',(0,0),(-1,-1),9),
-                    ('ROWBACKGROUNDS',(0,1),(-1,-1),[rc.HexColor('#131720'),rc.HexColor('#1a2035')]),
-                    ('TEXTCOLOR',(0,1),(-1,-1),body_c),
-                    ('GRID',(0,0),(-1,-1),.5,rc.HexColor('#232b40')),
-                    ('ROWPADDING',4),
-                ]))
-                items.append(Spacer(1,.2*cm)); items.append(t); items.append(Spacer(1,.3*cm))
-
-            # Insights
-            insights=e.get("insights",[])
-            if insights:
-                items.append(T("Key Insights",h3s))
-                for ins in insights:
-                    items.append(T(f"• {ins}",bus))
-
-            # Anomalies
-            anomalies=e.get("anomalies",[])
-            if anomalies:
-                items.append(T("Anomalies Detected",h3s))
-                for an in anomalies:
-                    items.append(T(f"⚠ {an}",anom))
-
-            # SQL
-            if e.get("sql_query","").strip():
-                items.append(T("SQL Query",h3s))
-                for line in e["sql_query"].split("\n"):
-                    items.append(T(line or " ",ms))
-
-            # Reasoning
-            if e.get("reasoning","").strip():
-                items.append(T("AI Reasoning",h3s))
-                items.append(T(e["reasoning"],bs))
-
-            items.append(Spacer(1,.2*cm))
-            items.append(HRFlowable(width="100%",thickness=.5,color=rc.HexColor('#1a2035'),spaceAfter=6))
-            story.append(KeepTogether(items))
-
-        doc.build(story)
-        return buf.getvalue()
+        import reportlab
     except ImportError:
-        return b""
-    except Exception as exc:
-        return b""
+        raise RuntimeError("reportlab not installed. Run: pip install reportlab")
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors as rc
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                    HRFlowable, KeepTogether, Table, TableStyle)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2.2*cm, rightMargin=2.2*cm,
+        topMargin=2.2*cm, bottomMargin=2.2*cm,
+        title="NLDA Pro Intelligence Report",
+    )
+    styles = getSampleStyleSheet()
+
+    # Safe colors — use standard colors, not dark hex backgrounds
+    GOLD   = rc.HexColor('#b8860b')   # darker gold — readable on white
+    VIOLET = rc.HexColor('#6a0dad')   # darker violet
+    GRAY   = rc.HexColor('#444444')
+    DARK   = rc.HexColor('#222222')
+    RED    = rc.HexColor('#cc0000')
+    BLUE   = rc.HexColor('#003399')
+    LTGRAY = rc.HexColor('#f5f5f5')
+    MDGRAY = rc.HexColor('#e0e0e0')
+
+    # Paragraph styles
+    title_s  = ParagraphStyle('PT', parent=styles['Title'],
+                               fontSize=26, textColor=GOLD, spaceAfter=4,
+                               fontName='Helvetica-Bold')
+    sub_s    = ParagraphStyle('PS', parent=styles['Normal'],
+                               fontSize=10, textColor=GRAY, spaceAfter=14)
+    h2_s     = ParagraphStyle('PH2', parent=styles['Heading2'],
+                               fontSize=13, textColor=VIOLET, spaceAfter=5, spaceBefore=16)
+    h3_s     = ParagraphStyle('PH3', parent=styles['Heading3'],
+                               fontSize=11, textColor=BLUE, spaceAfter=4, spaceBefore=10)
+    body_s   = ParagraphStyle('PB', parent=styles['Normal'],
+                               fontSize=10, textColor=DARK, leading=15, spaceAfter=4)
+    mono_s   = ParagraphStyle('PM', parent=styles['Normal'],
+                               fontSize=8,  textColor=GRAY, fontName='Courier',
+                               leading=12, spaceAfter=3)
+    bullet_s = ParagraphStyle('PBU', parent=styles['Normal'],
+                               fontSize=10, textColor=DARK, leading=14,
+                               spaceAfter=3, leftIndent=14)
+    anomaly_s= ParagraphStyle('PAN', parent=styles['Normal'],
+                               fontSize=10, textColor=RED, leading=14,
+                               spaceAfter=3, leftIndent=14)
+
+    def P(text, style):
+        return Paragraph(_safe_text(text), style)
+
+    # ── Cover ──────────────────────────────────────────────────────
+    story = [
+        P("NLDA Pro", title_s),
+        P(f"Data Intelligence Report", sub_s),
+        P(f"Generated: {datetime.now().strftime('%A, %d %B %Y at %H:%M')}", sub_s),
+        P(f"Total analyses in this report: {len(history)}", sub_s),
+        HRFlowable(width="100%", thickness=1.5, color=GOLD, spaceAfter=16),
+        Spacer(1, 0.4*cm),
+    ]
+
+    # ── One section per analysis ───────────────────────────────────
+    for i, e in enumerate(history, 1):
+        items = []
+
+        # Header
+        items.append(P(f"Analysis {i}  —  {e.get('ts','')}", h2_s))
+        items.append(P(f"Question: {e.get('question','')}", body_s))
+        items.append(Spacer(1, 0.15*cm))
+
+        # Summary
+        summary = e.get("summary","No summary available.")
+        items.append(P("Summary", h3_s))
+        items.append(P(summary, body_s))
+
+        # Confidence
+        conf = e.get("confidence","—").upper()
+        conf_color = {"HIGH": BLUE, "MEDIUM": GRAY, "LOW": RED}.get(conf, GRAY)
+        conf_style = ParagraphStyle('PCONF', parent=styles['Normal'],
+                                     fontSize=9, textColor=conf_color, spaceAfter=8)
+        items.append(P(f"AI Confidence: {conf}", conf_style))
+
+        # KPIs table
+        kpis = e.get("kpis", [])
+        if kpis:
+            items.append(P("Key Metrics", h3_s))
+            tdata = [["Metric", "Value", "Change"]]
+            for kpi in kpis:
+                tdata.append([
+                    _safe_text(kpi.get("label", "")),
+                    _safe_text(kpi.get("value", "")),
+                    _safe_text(kpi.get("delta", "—") or "—"),
+                ])
+            col_w = [7*cm, 4*cm, 4*cm]
+            tbl = Table(tdata, colWidths=col_w, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                # Header row
+                ('BACKGROUND',   (0, 0), (-1, 0), VIOLET),
+                ('TEXTCOLOR',    (0, 0), (-1, 0), rc.white),
+                ('FONTNAME',     (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE',     (0, 0), (-1, 0), 9),
+                ('ALIGN',        (0, 0), (-1, 0), 'CENTER'),
+                # Data rows
+                ('FONTSIZE',     (0, 1), (-1, -1), 9),
+                ('FONTNAME',     (0, 1), (-1, -1), 'Helvetica'),
+                ('TEXTCOLOR',    (0, 1), (-1, -1), DARK),
+                ('TOPPADDING',   (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING',(0, 0), (-1, -1), 5),
+                ('LEFTPADDING',  (0, 0), (-1, -1), 8),
+                # Alternating row backgrounds
+                ('BACKGROUND',   (0, 1), (-1, -1), LTGRAY),
+                ('ROWBACKGROUNDS',(0, 1), (-1, -1), [rc.white, LTGRAY]),
+                # Grid
+                ('GRID',         (0, 0), (-1, -1), 0.5, MDGRAY),
+                ('LINEBELOW',    (0, 0), (-1, 0), 1, VIOLET),
+            ]))
+            items.append(Spacer(1, 0.15*cm))
+            items.append(tbl)
+            items.append(Spacer(1, 0.3*cm))
+
+        # Insights
+        insights = e.get("insights", [])
+        if insights:
+            items.append(P("Key Insights", h3_s))
+            for ins in insights:
+                items.append(P(f"• {ins}", bullet_s))
+            items.append(Spacer(1, 0.1*cm))
+
+        # Anomalies
+        anomalies = e.get("anomalies", [])
+        if anomalies:
+            items.append(P("Anomalies Detected", h3_s))
+            for an in anomalies:
+                items.append(P(f"[!] {an}", anomaly_s))
+
+        # SQL query
+        sql = e.get("sql_query", "").strip()
+        if sql:
+            items.append(P("SQL Query", h3_s))
+            for line in sql.split("\n"):
+                items.append(P(line if line.strip() else " ", mono_s))
+            items.append(Spacer(1, 0.1*cm))
+
+        # Reasoning
+        reasoning = e.get("reasoning", "").strip()
+        if reasoning:
+            items.append(P("AI Reasoning", h3_s))
+            items.append(P(reasoning, body_s))
+
+        items.append(Spacer(1, 0.2*cm))
+        items.append(HRFlowable(width="100%", thickness=0.5, color=MDGRAY, spaceAfter=8))
+        story.append(KeepTogether(items))
+
+    doc.build(story)
+    return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════
 #  HTTP LAYER  — encoding-safe for all providers
@@ -1125,13 +1201,16 @@ with st.sidebar:
         st.markdown('<div class="sb-sec">Export</div>', unsafe_allow_html=True)
         if st.button("📄 PDF Intelligence Report",use_container_width=True,key="pdf_btn"):
             with st.spinner("Generating PDF…"):
-                pdf=make_pdf(st.session_state.chat_history)
-            if pdf:
-                st.download_button("⬇ Download PDF",pdf,
-                    file_name=f"nlda_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                    mime="application/pdf",key="dl_pdf")
-            else:
-                st.info("Install reportlab: `pip install reportlab`")
+                try:
+                    pdf=make_pdf(st.session_state.chat_history)
+                    st.download_button(
+                        "⬇ Download PDF", pdf,
+                        file_name=f"nlda_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                        mime="application/pdf", key="dl_pdf")
+                except RuntimeError as pdf_err:
+                    st.error(str(pdf_err))
+                except Exception as pdf_err:
+                    st.error(f"PDF error: {pdf_err}")
         if st.button("🗑 Clear Session",use_container_width=True,key="clr_btn"):
             for k,v in _DEFAULTS.items(): st.session_state[k]=v
             st.rerun()
