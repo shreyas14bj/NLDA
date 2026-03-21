@@ -250,6 +250,10 @@ _D = {
     "show_timeline":False, "show_composer":False,
     "story_cache":{},
     "query_counter":0,
+    "comp_preset_fig":None,
+    "comp_preset_name":"",
+    "comp_preset_desc":"",
+    "comp_preset_query":"",
 }
 for k,v in _D.items():
     if k not in st.session_state: st.session_state[k]=v
@@ -748,16 +752,48 @@ def make_pdf(history):
     # ── Build story ──────────────────────────────────────────────────
     elements=[]
 
-    # Cover page
-    elements.append(Spacer(1,1*cm))
-    elements.append(P("NLDA Pro",cover_s))
-    elements.append(P("Data Intelligence Report",tagline_s))
-    elements.append(HR(1.5,GOLD,14))
-    elements.append(P(f"Generated: {datetime.now().strftime('%A, %d %B %Y at %H:%M')}",sub_s))
-    elements.append(P(f"Total analyses: {len(history)}",sub_s))
+    # Cover page — clean, properly spaced
+    elements.append(Spacer(1, 2.5*cm))
+
+    # Title block with a colored background bar
+    title_data=[[P("NLDA Pro", S("ct", fontSize=36, textColor=WHITE,
+                                  fontName="Helvetica-Bold", leading=40))]]
+    title_tbl=Table(title_data, colWidths=[16*cm])
+    title_tbl.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,-1), GOLD),
+        ("LEFTPADDING",  (0,0),(-1,-1), 16),
+        ("RIGHTPADDING", (0,0),(-1,-1), 16),
+        ("TOPPADDING",   (0,0),(-1,-1), 14),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 14),
+    ]))
+    elements.append(title_tbl)
+    elements.append(Spacer(1, 0.3*cm))
+
+    # Sub-title bar
+    sub_data=[[P("Data Intelligence Report", S("cs", fontSize=16, textColor=WHITE,
+                                                fontName="Helvetica-Bold", leading=20))]]
+    sub_tbl=Table(sub_data, colWidths=[16*cm])
+    sub_tbl.setStyle(TableStyle([
+        ("BACKGROUND",  (0,0),(-1,-1), VIOLET),
+        ("LEFTPADDING",  (0,0),(-1,-1), 16),
+        ("RIGHTPADDING", (0,0),(-1,-1), 16),
+        ("TOPPADDING",   (0,0),(-1,-1), 10),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 10),
+    ]))
+    elements.append(sub_tbl)
+    elements.append(Spacer(1, 1.2*cm))
+
+    elements.append(HR(1.0, GOLD, 10))
+    elements.append(Spacer(1, 0.4*cm))
+    elements.append(P(f"Generated: {datetime.now().strftime('%A, %d %B %Y at %H:%M')}", sub_s))
+    elements.append(P(f"Total analyses in this report: {len(history)}", sub_s))
+    elements.append(P(f"Provider: {history[-1].get('provider','—') if history else '—'}", sub_s))
     if not HAS_KALEIDO:
-        elements.append(P("[Charts not embedded — install kaleido: pip install kaleido]",
-                          S("note",fontSize=9,textColor=DKGRAY,spaceAfter=4)))
+        elements.append(Spacer(1, 0.3*cm))
+        elements.append(P(
+            "Note: Chart images not embedded. Install kaleido for chart images: pip install kaleido",
+            S("note", fontSize=9, textColor=DKGRAY, spaceAfter=4, fontName="Helvetica-Oblique")))
+    elements.append(Spacer(1, 0.6*cm))
     elements.append(HR(0.5,MDGRAY,20))
 
     # Session summary table
@@ -1135,7 +1171,7 @@ with st.sidebar:
     st.markdown("""<div class="logo-bar">
         <span class="logo-hex">⬡</span>
         <span class="logo-name">NLDA Pro</span>
-        <span class="logo-tag">Business Data Intelligence.</span>
+        <span class="logo-tag">Elite Data Intelligence · v5.0</span>
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="sb-sec">AI Provider</div>', unsafe_allow_html=True)
@@ -1220,8 +1256,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────
 st.markdown("""<div class="hero">
     <div class="hero-grid"></div><div class="hero-glow"></div><div class="hero-glow2"></div><div class="hero-glow3"></div>
-    <div class="hero-eye">Business Data Intelligence Platform·</div>
-    <h1 class="hero-title">Ask anything.<br><span>Understand everything.</span></h1>
+    <div class="hero-eye">Elite Data Intelligence Platform · v5.0</div>
+    <h1 class="hero-title">Your data has<br><span>a story to tell.</span></h1>
     <p class="hero-sub">Ask anything in plain English. Get charts, insights, per-query narratives, AI data stories, and professional PDF reports — all in seconds.</p>
     <div class="hero-badges">
         <div class="hb"><div class="dot" style="background:#34d399"></div>25+ chart types</div>
@@ -1447,36 +1483,105 @@ if st.session_state.get("show_composer"):
         # Dataset selector
         cds=st.selectbox("Select Dataset",dnames,key="comp_ds")
         cdf=st.session_state.dataframes[cds]
+        # ── Industry Preset Buttons — single row, each instantly renders ──
+        st.markdown("""<div style="font-family:var(--fm);font-size:9px;color:var(--t3);
+            letter-spacing:.2em;text-transform:uppercase;margin:14px 0 10px">
+            Industry Presets — Click to instantly generate chart & insights
+        </div>""", unsafe_allow_html=True)
 
-        # Industry presets
-        st.markdown('<div style="font-family:var(--fm);font-size:9px;color:var(--t3);letter-spacing:.2em;text-transform:uppercase;margin:14px 0 8px">Industry Presets — Click to Auto-Configure</div>',unsafe_allow_html=True)
-        preset_cols=st.columns(len(INDUSTRY_PRESETS))
-        selected_preset=st.session_state.get("selected_preset",None)
+        preset_names = list(INDUSTRY_PRESETS.keys())
+        preset_cols  = st.columns(len(preset_names))
 
-        preset_html=""
-        for pname,pdata in INDUSTRY_PRESETS.items():
-            active_cls="border-color:var(--gold);background:var(--gd);" if selected_preset==pname else ""
-            preset_html+=f'<div class="preset-card" style="{active_cls}"><div class="preset-icon">{pdata["icon"]}</div><div class="preset-name">{pname}</div><div class="preset-desc">{pdata["desc"]}</div></div>'
-        st.markdown(f'<div class="preset-grid">{preset_html}</div>',unsafe_allow_html=True)
-
-        # Preset buttons (actual clickable)
-        preset_btn_cols=st.columns(len(INDUSTRY_PRESETS))
-        for col,(pname,pdata) in zip(preset_btn_cols,INDUSTRY_PRESETS.items()):
+        for col, pname in zip(preset_cols, preset_names):
+            pdata = INDUSTRY_PRESETS[pname]
+            is_active = st.session_state.get("selected_preset") == pname
+            # Highlight active preset with gold border via inline CSS trick
+            label = f"{pdata['icon']} {pname}"
             with col:
-                if st.button(pname,key=f"preset_{pname}"):
-                    st.session_state["selected_preset"]=pname
-                    # Auto-configure columns
-                    ax=_pick_col(cdf,pdata.get("x_pref",[]))
-                    ay=_pick_col(cdf,pdata.get("y_pref",[]))
-                    ac=_pick_col(cdf,pdata.get("color_pref",[]) if pdata.get("color_pref") else [])
-                    st.session_state["comp_x_val"]=ax or "(auto)"
-                    st.session_state["comp_y_val"]=ay or "(auto)"
-                    st.session_state["comp_col_val"]=ac or "(none)"
-                    st.session_state["comp_ct_val"]=pdata["chart"]
-                    st.session_state["comp_title_val"]=f"{pname} Analysis"
+                if st.button(label, key=f"preset_{pname}",
+                             help=pdata["desc"]):
+                    # 1. Store selection
+                    st.session_state["selected_preset"] = pname
+
+                    # 2. Auto-resolve columns
+                    ax = _pick_col(cdf, pdata.get("x_pref") or [])
+                    ay = _pick_col(cdf, pdata.get("y_pref") or [])
+                    ac = _pick_col(cdf, pdata.get("color_pref") or [])
+                    ct_val = pdata["chart"]
+
+                    st.session_state["comp_x_val"]     = ax or "(auto)"
+                    st.session_state["comp_y_val"]     = ay or "(auto)"
+                    st.session_state["comp_col_val"]   = ac or "(none)"
+                    st.session_state["comp_ct_val"]    = ct_val
+                    st.session_state["comp_title_val"] = f"{pname} Analysis"
+
+                    # 3. Immediately render chart and store it
+                    fc_preset = {
+                        "x":     ax,
+                        "y":     ay,
+                        "color": ac,
+                        "title": f"{pname} Analysis"
+                    }
+                    fg_preset = make_chart(cdf, ct_val, fc_preset)
+                    st.session_state["comp_preset_fig"]   = fg_preset
+                    st.session_state["comp_preset_name"]  = pname
+                    st.session_state["comp_preset_desc"]  = pdata["desc"]
+
+                    # 4. Auto-generate insights query and run it
+                    preset_query = {
+                        "Sales Performance":   f"Show top performers by revenue with breakdown by {ax or 'category'}",
+                        "Trend Analysis":      f"Show the trend of {ay or 'revenue'} over time",
+                        "Distribution":        f"Show the distribution and outliers of {ay or 'revenue'} by {ax or 'category'}",
+                        "Part-of-Whole":       f"Show the share of {ay or 'revenue'} by {ax or 'category'} as a percentage",
+                        "Correlation":         f"Show the correlation between {ax or 'spend'} and {ay or 'revenue'}",
+                        "Marketing ROI":       f"Show ROAS and ROI by {ax or 'channel'} with revenue attribution",
+                        "HR Analytics":        f"Show {ay or 'salary'} distribution by {ax or 'department'}",
+                        "Operations":          f"Show the correlation matrix of all operational metrics",
+                        "Funnel / Pipeline":   f"Show the conversion funnel from {ax or 'stage'} by {ay or 'count'}",
+                        "Geographic":          f"Show {ay or 'revenue'} by {ax or 'region'} ranked highest to lowest",
+                    }.get(pname, f"Analyze {pname.lower()} metrics and show key insights")
+
+                    st.session_state["comp_preset_query"] = preset_query
                     st.rerun()
 
-        st.markdown('<div style="font-family:var(--fm);font-size:9px;color:var(--t3);letter-spacing:.2em;text-transform:uppercase;margin:18px 0 8px">Manual Configuration</div>',unsafe_allow_html=True)
+        # Show active preset result
+        if st.session_state.get("comp_preset_fig") is not None:
+            pname_active = st.session_state.get("comp_preset_name", "")
+            pdesc_active = st.session_state.get("comp_preset_desc", "")
+            st.markdown(f"""<div style="display:flex;align-items:center;gap:10px;margin:16px 0 8px">
+                <span style="font-family:var(--fd);font-size:14px;font-weight:700;color:var(--gold)">{pname_active}</span>
+                <span style="font-family:var(--fm);font-size:10px;color:var(--t3)">{pdesc_active}</span>
+            </div>""", unsafe_allow_html=True)
+            st.plotly_chart(st.session_state["comp_preset_fig"],
+                            use_container_width=True, key="comp_preset_chart")
+
+            # Run preset insight query button
+            pq = st.session_state.get("comp_preset_query", "")
+            pq_col1, pq_col2 = st.columns([2, 5])
+            with pq_col1:
+                if st.button(f"💡 Get {pname_active} Insights",
+                             key="preset_insights_btn", type="primary"):
+                    st.session_state["_prefill"] = pq
+                    # Also run it directly
+                    prog_ph = st.empty()
+                    try:
+                        preset_entry = run_query(pq, prog_ph)
+                        st.session_state.chat_history.append(preset_entry)
+                        st.session_state.total_queries += 1
+                        st.session_state["query_counter"] = st.session_state.get("query_counter", 0) + 1
+                        st.rerun()
+                    except Exception as ex:
+                        prog_ph.empty(); st.error(str(ex))
+            with pq_col2:
+                if st.button("📌 Pin this chart", key="pin_preset_chart"):
+                    st.session_state.pinned_charts.append(st.session_state["comp_preset_fig"])
+                    st.success("Chart pinned to dashboard!")
+
+            st.markdown('<div style="margin:16px 0;border-top:1px solid var(--bd0)"></div>',
+                        unsafe_allow_html=True)
+
+        # ── Manual Builder ──────────────────────────────────────────
+        st.markdown('<div style="font-family:var(--fm);font-size:9px;color:var(--t3);letter-spacing:.2em;text-transform:uppercase;margin:14px 0 8px">Manual Chart Builder</div>',unsafe_allow_html=True)
 
         all_cols=["(auto)"]+list(cdf.columns)
         chart_types_list=["bar","grouped bar","stacked bar","horizontal bar","line","area","scatter",
@@ -1512,10 +1617,9 @@ if st.session_state.get("show_composer"):
                 if st.button("📌 Pin this chart",key="pin_comp"):
                     st.session_state.pinned_charts.append(fg); st.success("Pinned!")
             else:
-                st.warning(f"Could not render '{cct}'. The chart type may need specific column types.")
-                # Show what columns are available
-                nc=smart_numeric_cols(cdf); cc2=smart_cat_cols(cdf)
-                st.info(f"Numeric columns: {nc[:5]}  |  Categorical columns: {cc2[:5]}")
+                st.warning(f"Could not render '{cct}'.")
+                nc_=smart_numeric_cols(cdf); cc_=smart_cat_cols(cdf)
+                st.info(f"Numeric columns: {nc_[:5]}  |  Categorical: {cc_[:5]}")
 
 # ─────────────────────────────────────────────────────────────────────
 #  CHAT HISTORY
