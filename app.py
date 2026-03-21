@@ -245,8 +245,28 @@ button[data-testid="baseButton-primary"]:hover{box-shadow:0 8px 40px rgba(240,19
 .tl-q{font-size:13px;font-weight:600;color:var(--t1);}
 .tl-a{font-size:12px;color:var(--t2);margin-top:4px;line-height:1.5;}
 .no-chart{padding:40px;text-align:center;color:var(--t3);font-family:var(--fm);font-size:11px;background:var(--raised);border:1px dashed var(--bd1);border-radius:var(--r2);margin:8px 0;}
-</style>
-"""
+
+/* POWER BI DASHBOARD */
+.pbi-wrap{background:var(--base);border:1px solid var(--bd1);border-radius:var(--r3);padding:0;overflow:hidden;margin-bottom:28px;}
+.pbi-header{background:linear-gradient(135deg,#0f172a,#1e1b4b);padding:20px 28px 16px;border-bottom:1px solid var(--bd1);display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;}
+.pbi-title{font-family:var(--fd);font-size:20px;font-weight:800;color:var(--t1);}
+.pbi-subtitle{font-family:var(--fm);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--t3);margin-top:3px;}
+.pbi-stamp{font-family:var(--fm);font-size:9px;color:var(--t3);}
+.pbi-kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--bd0);border-bottom:1px solid var(--bd0);}
+.pbi-kpi{background:var(--surface);padding:16px 20px;position:relative;overflow:hidden;}
+.pbi-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;}
+.pbi-kpi-icon{font-size:18px;margin-bottom:6px;display:block;}
+.pbi-kpi-val{font-family:var(--fm);font-size:22px;font-weight:500;color:var(--t1);display:block;line-height:1.1;}
+.pbi-kpi-lbl{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;font-family:var(--fm);margin-top:4px;display:block;}
+.pbi-kpi-avg{font-family:var(--fm);font-size:9px;color:var(--t3);margin-top:2px;}
+.pbi-kpi-delta{font-family:var(--fm);font-size:10px;margin-top:3px;display:flex;align-items:center;gap:3px;}
+.pbi-kpi-delta.up{color:var(--emerald);}.pbi-kpi-delta.dn{color:var(--rose);}
+.pbi-chart-grid{padding:20px;display:grid;gap:16px;}
+.pbi-chart-tile{background:var(--raised);border:1px solid var(--bd1);border-radius:var(--r2);padding:0;overflow:hidden;}
+.pbi-chart-label{font-family:var(--fm);font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--t3);padding:10px 14px 0;}
+.pbi-footer{background:var(--base);border-top:1px solid var(--bd0);padding:10px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;}
+.pbi-footer-text{font-family:var(--fm);font-size:9px;color:var(--t3);}
+.pbi-divider{height:1px;background:var(--bd0);margin:0 20px;}</style>"""
 st.markdown(CSS, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
@@ -264,6 +284,7 @@ _D = {
     "show_timeline":False, "show_composer":False,
     "story_cache":{},
     "query_counter":0,
+    "story_show_raw":False,
     "comp_preset_fig":None,
     "comp_preset_name":"",
     "comp_preset_desc":"",
@@ -608,57 +629,419 @@ def make_chart(df, chart_type, cfg):
         except Exception: pass
         return None
 
+def make_chart(df, chart_type, cfg):
+    if df is None or df.empty: return None
+    if not chart_type or chart_type.lower().strip() in ("none",""): return None
+    ct=chart_type.lower().strip().replace(" ","_").replace("-","_")
+    x=_safe_col(df,cfg.get("x")); y=_safe_col(df,cfg.get("y"))
+    color=_safe_col(df,cfg.get("color")); size=_safe_col(df,cfg.get("size"))
+    title=cfg.get("title","")
+    if ct in NEEDS_NUMERIC_Y:
+        if y is None or not pd.api.types.is_numeric_dtype(df[y]): y=_best_y(df,y)
+        if x is None: x=_best_x(df,x)
+
+    # Rich distinct color palette — 20 colors for maximum differentiation
+    COLORS = ["#f0c040","#22d3ee","#a78bfa","#34d399","#fb7185","#fbbf24",
+              "#38bdf8","#f472b6","#4ade80","#818cf8","#fdba74","#67e8f9",
+              "#c084fc","#86efac","#fca5a5","#fde68a","#7dd3fc","#f9a8d4",
+              "#6ee7b7","#a5b4fc"]
+
+    try:
+        kw=dict(title=title); fig=None
+
+        def color_map(df_col):
+            """Generate discrete color map for a categorical column."""
+            if df_col is None or df_col not in df.columns: return {}
+            vals=df[df_col].dropna().unique().tolist()
+            return {v:COLORS[i%len(COLORS)] for i,v in enumerate(vals)}
+
+        cmap = color_map(color) if color else None
+
+        if ct=="bar":
+            if color:
+                fig=px.bar(df,x=x,y=y,color=color,barmode="group",
+                           color_discrete_map=cmap,**kw)
+            else:
+                # Color each bar differently
+                fig=px.bar(df,x=x,y=y,color=x,
+                           color_discrete_sequence=COLORS,**kw)
+            fig.update_traces(marker_line_width=0,opacity=.9)
+        elif ct=="grouped_bar":
+            fig=px.bar(df,x=x,y=y,color=color,barmode="group",
+                       color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+        elif ct=="stacked_bar":
+            fig=px.bar(df,x=x,y=y,color=color,barmode="stack",
+                       color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+        elif ct=="horizontal_bar":
+            if color:
+                fig=px.bar(df,x=y,y=x,color=color,orientation="h",
+                           color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+            else:
+                fig=px.bar(df,x=y,y=x,color=x,orientation="h",
+                           color_discrete_sequence=COLORS,**kw)
+        elif ct in ("line","multi_line"):
+            fig=px.line(df,x=x,y=y,color=color,markers=True,
+                        color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+            fig.update_traces(line_width=2.5)
+        elif ct=="area":
+            fig=px.area(df,x=x,y=y,color=color,
+                        color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+        elif ct=="stacked_area":
+            fig=px.area(df,x=x,y=y,color=color,
+                        color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+        elif ct=="scatter":
+            fig=px.scatter(df,x=x,y=y,color=color,size=size,
+                           color_discrete_map=cmap,color_discrete_sequence=COLORS,
+                           color_continuous_scale="Viridis",
+                           trendline="ols" if (not color and x and y) else None,**kw)
+        elif ct=="bubble":
+            fig=px.scatter(df,x=x,y=y,color=color,size=size or y,
+                           color_discrete_sequence=COLORS,
+                           color_continuous_scale="Plasma",**kw)
+        elif ct=="pie":
+            fig=px.pie(df,names=x,values=y,
+                       color_discrete_sequence=COLORS,**kw)
+            fig.update_traces(textposition="inside",textinfo="percent+label",
+                              marker_line_width=2,marker_line_color="#05060a")
+        elif ct=="donut":
+            fig=px.pie(df,names=x,values=y,hole=.45,
+                       color_discrete_sequence=COLORS,**kw)
+            fig.update_traces(textposition="inside",textinfo="percent+label",
+                              marker_line_width=2,marker_line_color="#05060a")
+        elif ct=="sunburst":
+            path=[c for c in [color,x] if c]
+            fig=px.sunburst(df,path=path or [x],values=y,
+                            color_discrete_sequence=COLORS,**kw)
+        elif ct=="treemap":
+            path=[c for c in [color,x] if c]
+            fig=px.treemap(df,path=path or [x],values=y,
+                           color_discrete_sequence=COLORS,**kw)
+        elif ct=="histogram":
+            fig=px.histogram(df,x=x or _best_x(df),color=color,
+                             color_discrete_map=cmap,color_discrete_sequence=COLORS,
+                             opacity=0.85,**kw)
+            fig.update_traces(marker_line_width=0.5,marker_line_color="#131720")
+        elif ct=="box":
+            fig=px.box(df,x=x,y=y,color=color,
+                       color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+        elif ct=="violin":
+            fig=px.violin(df,x=x,y=y,color=color,box=True,
+                          color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
+        elif ct=="strip":
+            fig=px.strip(df,x=x,y=y,color=color,
+                         color_discrete_sequence=COLORS,**kw)
+        elif ct in ("heatmap","correlation_matrix"):
+            num=df[smart_numeric_cols(df)]
+            if num.shape[1]<2: return None
+            fig=px.imshow(num.corr().round(2),
+                          color_continuous_scale=["#fb7185","#131720","#22d3ee"],
+                          zmin=-1,zmax=1,text_auto=True,**kw)
+        elif ct=="density_heatmap":
+            fig=px.density_heatmap(df,x=x,y=y,
+                                   color_continuous_scale="Viridis",**kw)
+        elif ct=="waterfall":
+            if x and y:
+                fig=go.Figure(go.Waterfall(
+                    measure=["relative"]*len(df),
+                    x=df[x].astype(str).tolist(),y=df[y].tolist(),
+                    connector={"line":{"color":"rgba(255,255,255,0.15)"}},
+                    increasing={"marker":{"color":"#34d399"}},
+                    decreasing={"marker":{"color":"#fb7185"}},
+                    totals={"marker":{"color":"#f0c040"}}))
+                fig.update_layout(title=title)
+            else: return None
+        elif ct=="funnel":
+            fig=px.funnel(df,x=y,y=x,
+                          color_discrete_sequence=COLORS,**kw)
+        elif ct=="gauge":
+            gy=y or _best_y(df)
+            if gy:
+                val=float(df[gy].mean()); mx=max(float(df[gy].max()),0.001)
+                fig=go.Figure(go.Indicator(
+                    mode="gauge+number+delta",value=val,
+                    delta={"reference":mx*0.6},
+                    gauge={"axis":{"range":[0,mx]},"bar":{"color":"#f0c040"},
+                           "steps":[{"range":[0,mx*.33],"color":"#fb7185"},
+                                    {"range":[mx*.33,mx*.66],"color":"#fbbf24"},
+                                    {"range":[mx*.66,mx],"color":"#34d399"}],
+                           "threshold":{"line":{"color":"#fb7185","width":3},
+                                        "thickness":.75,"value":mx*.9}},
+                    title={"text":title or gy,"font":{"color":"#f0c040","size":13}}))
+            else: return None
+        elif ct=="radar":
+            num_c=smart_numeric_cols(df)[:8]
+            if len(num_c)<3: return None
+            means=[float(df[c].mean()) for c in num_c]
+            fig=go.Figure(go.Scatterpolar(
+                r=means+[means[0]],theta=num_c+[num_c[0]],
+                fill="toself",line_color="#f0c040",
+                fillcolor="rgba(240,192,64,.2)",name=title))
+            fig.update_layout(
+                polar=dict(radialaxis=dict(visible=True,gridcolor="#232b40"),
+                           angularaxis=dict(gridcolor="#232b40")),title=title)
+        elif ct=="parallel_coordinates":
+            num_c=smart_numeric_cols(df)
+            if len(num_c)<2: return None
+            fig=px.parallel_coordinates(df,dimensions=num_c,color=num_c[0],
+                color_continuous_scale=["#f0c040","#22d3ee","#a78bfa"],**kw)
+        elif ct in ("candlestick","ohlc"):
+            ohcl={c.lower():c for c in df.columns}
+            if not all(k in ohcl for k in ["open","high","low","close"]): return None
+            xcol=x or (df.columns[0] if df.columns[0].lower() not in ["open","high","low","close"] else None)
+            if ct=="candlestick":
+                fig=go.Figure(go.Candlestick(
+                    x=df[xcol].tolist() if xcol else list(range(len(df))),
+                    open=df[ohcl["open"]],high=df[ohcl["high"]],
+                    low=df[ohcl["low"]],close=df[ohcl["close"]],
+                    increasing_line_color="#34d399",decreasing_line_color="#fb7185"))
+            else:
+                fig=go.Figure(go.Ohlc(
+                    x=df[xcol].tolist() if xcol else list(range(len(df))),
+                    open=df[ohcl["open"]],high=df[ohcl["high"]],
+                    low=df[ohcl["low"]],close=df[ohcl["close"]]))
+            fig.update_layout(title=title)
+        else:
+            if x and y:
+                fig=px.bar(df,x=x,y=y,color=x,
+                           color_discrete_sequence=COLORS,title=f"{title} (auto-bar)")
+            else: return None
+
+        if fig is None: return None
+        fig.update_layout(**PLOTLY_THEME,title_x=0.,
+                          hoverlabel=dict(bgcolor="#131720",font_size=11,font_family="JetBrains Mono"))
+        NO_AXES={"pie","donut","treemap","sunburst","heatmap","correlation_matrix",
+                 "density_heatmap","radar","gauge","parallel_coordinates","candlestick","ohlc"}
+        if ct not in NO_AXES:
+            fig.update_xaxes(showgrid=True,gridwidth=1,gridcolor="#1a2035",showline=False,tickfont_size=10)
+            fig.update_yaxes(showgrid=True,gridwidth=1,gridcolor="#1a2035",showline=False,tickfont_size=10)
+        return fig
+    except Exception:
+        try:
+            nx=_best_x(df); ny=_best_y(df)
+            if nx and ny:
+                fb=px.bar(df.head(30),x=nx,y=ny,color=nx,
+                          color_discrete_sequence=COLORS,title=f"{title} (fallback)")
+                fb.update_layout(**PLOTLY_THEME,title_x=0.)
+                return fb
+        except Exception: pass
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  POWER BI STYLE DASHBOARD
+# ─────────────────────────────────────────────────────────────────────
+DASH_COLORS = ["#f0c040","#22d3ee","#a78bfa","#34d399","#fb7185",
+               "#fbbf24","#38bdf8","#f472b6","#4ade80","#818cf8"]
+
+def make_powerbi_dashboard(df, dataset_name):
+    """
+    Returns a dict with:
+      kpi_tiles  — list of {label, value, delta, color, icon}
+      charts     — list of (section_label, fig)
+    """
+    nc  = smart_numeric_cols(df)
+    cc  = smart_cat_cols(df)
+    dc  = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+
+    # ── KPI strip ─────────────────────────────────────────────────────
+    kpi_tiles = []
+    kpi_icons = ["💰","📈","🎯","⚡","🔥","💡"]
+    kpi_colors= DASH_COLORS
+    for i, col in enumerate(nc[:6]):
+        s   = df[col].dropna()
+        val = s.sum()
+        avg = s.mean()
+        med = s.median()
+        # Compute a fake "vs last period" delta using first vs second half
+        half = len(s)//2
+        delta_pct = None
+        if half > 0:
+            first_h  = s.iloc[:half].mean()
+            second_h = s.iloc[half:].mean()
+            if first_h != 0:
+                delta_pct = round((second_h - first_h) / abs(first_h) * 100, 1)
+        kpi_tiles.append({
+            "label":  col.replace("_"," ").title(),
+            "value":  fmt(val),
+            "avg":    fmt(avg),
+            "delta":  f"{'+' if (delta_pct or 0)>=0 else ''}{delta_pct}%" if delta_pct is not None else None,
+            "color":  kpi_colors[i % len(kpi_colors)],
+            "icon":   kpi_icons[i % len(kpi_icons)],
+        })
+
+    charts = []
+    try:
+        # Chart 1 — Top Categories bar (colored per category)
+        if cc and nc:
+            cat, num = cc[0], nc[0]
+            g = (df.groupby(cat)[num].sum()
+                   .reset_index()
+                   .sort_values(num, ascending=False)
+                   .head(10))
+            fig = px.bar(
+                g, x=cat, y=num,
+                color=cat,
+                color_discrete_sequence=DASH_COLORS,
+                title=f"Top {cat.replace('_',' ').title()} by {num.replace('_',' ').title()}",
+                text_auto=".2s")
+            fig.update_traces(marker_line_width=0, opacity=.92,
+                              textfont_size=10, textposition="outside",
+                              cliponaxis=False)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False)
+            fig.update_xaxes(showgrid=False, tickfont_size=10)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            charts.append(("Top Performers", fig))
+
+        # Chart 2 — Trend line over time
+        if dc and nc:
+            td = df.copy()
+            td["_period"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
+            td2 = td.groupby("_period")[nc[0]].agg(["sum","mean"]).reset_index()
+            td2.columns = ["Period","Total","Average"]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=td2["Period"], y=td2["Total"],
+                name="Total", line=dict(color="#f0c040", width=3),
+                fill="tozeroy", fillcolor="rgba(240,192,64,.08)",
+                mode="lines+markers", marker=dict(size=6)))
+            fig.add_trace(go.Scatter(
+                x=td2["Period"], y=td2["Average"],
+                name="Average", line=dict(color="#22d3ee", width=2, dash="dot"),
+                mode="lines"))
+            fig.update_layout(**PLOTLY_THEME,
+                title=f"{nc[0].replace('_',' ').title()} Trend Over Time",
+                title_x=0., legend=dict(orientation="h", y=1.1))
+            fig.update_xaxes(showgrid=False, tickfont_size=9, tickangle=-30)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            charts.append(("Trend Over Time", fig))
+
+        # Chart 3 — Donut share
+        if cc and nc:
+            g2 = df.groupby(cc[0])[nc[0]].sum().reset_index()
+            fig = px.pie(
+                g2, names=cc[0], values=nc[0], hole=.52,
+                color_discrete_sequence=DASH_COLORS,
+                title=f"Share of {nc[0].replace('_',' ').title()}")
+            fig.update_traces(
+                textposition="outside", textinfo="percent+label",
+                marker_line_width=3, marker_line_color="#05060a",
+                pull=[0.04]*len(g2))
+            fig.update_layout(**PLOTLY_THEME, title_x=0.,
+                              showlegend=False,
+                              annotations=[dict(
+                                  text=f"<b>{fmt(g2[nc[0]].sum())}</b><br>Total",
+                                  x=0.5,y=0.5,font_size=13,font_color="#f0c040",
+                                  showarrow=False)])
+            charts.append(("Market Share", fig))
+
+        # Chart 4 — Scatter correlation (if 2+ numeric)
+        if len(nc) >= 2:
+            sample = df.sample(min(300, len(df)))
+            col_arg = cc[0] if cc else None
+            fig = px.scatter(
+                sample, x=nc[0], y=nc[1],
+                color=col_arg,
+                color_discrete_sequence=DASH_COLORS,
+                color_continuous_scale="Plasma",
+                trendline="ols" if not col_arg else None,
+                title=f"{nc[0].replace('_',' ').title()} vs {nc[1].replace('_',' ').title()}",
+                opacity=0.75, size_max=10)
+            fig.update_traces(marker=dict(size=7, line_width=0))
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            fig.update_xaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            charts.append(("Correlation Analysis", fig))
+
+        # Chart 5 — Heatmap / correlation matrix
+        if len(nc) >= 3:
+            corr = df[nc[:10]].corr().round(2)
+            fig  = px.imshow(
+                corr,
+                color_continuous_scale=["#fb7185","#0e1117","#22d3ee"],
+                zmin=-1, zmax=1, text_auto=True,
+                title="Metric Correlation Matrix")
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            fig.update_coloraxes(colorbar_tickfont_size=9)
+            charts.append(("Correlations", fig))
+
+        # Chart 6 — Box distribution per category
+        if cc and nc and len(nc) >= 1:
+            fig = px.box(
+                df, x=cc[0], y=nc[0],
+                color=cc[0],
+                color_discrete_sequence=DASH_COLORS,
+                title=f"Distribution of {nc[0].replace('_',' ').title()} by {cc[0].replace('_',' ').title()}",
+                notched=True)
+            fig.update_traces(marker_size=3, line_width=1.5)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False)
+            fig.update_xaxes(showgrid=False, tickfont_size=10)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            charts.append(("Distribution", fig))
+
+        # Chart 7 — Multi-metric comparison (grouped bar, 2nd categorical)
+        if len(cc) >= 1 and len(nc) >= 2:
+            g3 = df.groupby(cc[0])[nc[:3]].sum().reset_index()
+            g3m = g3.melt(id_vars=cc[0], var_name="Metric", value_name="Value")
+            fig = px.bar(
+                g3m, x=cc[0], y="Value", color="Metric",
+                barmode="group",
+                color_discrete_sequence=DASH_COLORS,
+                title=f"Multi-Metric Breakdown by {cc[0].replace('_',' ').title()}")
+            fig.update_traces(marker_line_width=0, opacity=.88)
+            fig.update_layout(**PLOTLY_THEME, title_x=0.,
+                              legend=dict(orientation="h", y=1.1))
+            fig.update_xaxes(showgrid=False, tickfont_size=10)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            charts.append(("Multi-Metric Comparison", fig))
+
+        # Chart 8 — Horizontal ranked bar (top 10)
+        if cc and nc:
+            cat, num = cc[0], nc[0]
+            g4 = (df.groupby(cat)[num].sum()
+                    .reset_index()
+                    .sort_values(num, ascending=True)
+                    .tail(10))
+            fig = px.bar(
+                g4, x=num, y=cat, orientation="h",
+                color=num, color_continuous_scale=["#1a2035","#f0c040"],
+                title=f"Ranked {num.replace('_',' ').title()} by {cat.replace('_',' ').title()}",
+                text_auto=".2s")
+            fig.update_traces(marker_line_width=0, textfont_size=10)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False,
+                              coloraxis_showscale=False)
+            fig.update_xaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            fig.update_yaxes(showgrid=False, tickfont_size=10)
+            charts.append(("Rankings", fig))
+
+    except Exception:
+        pass
+
+    return {"kpis": kpi_tiles, "charts": charts}
+
+
 def make_insight_chart(df, insight_text, idx):
-    """Generate a small supporting chart for each insight."""
+    """Small supporting chart per insight."""
     if df is None or df.empty: return None
     nc=smart_numeric_cols(df); cc=smart_cat_cols(df)
     try:
         if cc and nc:
             g=df.groupby(cc[0])[nc[0]].mean().reset_index().sort_values(nc[0],ascending=False).head(8)
-            fig=px.bar(g,x=cc[0],y=nc[0],title=f"Supporting: {nc[0]} by {cc[0]}")
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,height=250,
-                              margin=dict(l=8,r=8,t=40,b=8))
-            fig.update_traces(marker_line_width=0,opacity=.85)
+            fig=px.bar(g,x=cc[0],y=nc[0],color=cc[0],
+                       color_discrete_sequence=DASH_COLORS,
+                       title=f"Supporting: {nc[0]} by {cc[0]}")
+            fig.update_layout(**PLOTLY_THEME,title_x=0.,height=250,margin=dict(l=8,r=8,t=40,b=8),showlegend=False)
+            fig.update_traces(marker_line_width=0,opacity=.88)
             fig.update_xaxes(showgrid=False,tickfont_size=9)
             fig.update_yaxes(showgrid=True,gridcolor="#1a2035",tickfont_size=9)
             return fig
         elif len(nc)>=2:
-            fig=px.scatter(df.sample(min(100,len(df))),x=nc[0],y=nc[1],title=f"{nc[0]} vs {nc[1]}")
+            fig=px.scatter(df.sample(min(100,len(df))),x=nc[0],y=nc[1],
+                           color_discrete_sequence=DASH_COLORS,
+                           title=f"{nc[0]} vs {nc[1]}")
             fig.update_layout(**PLOTLY_THEME,title_x=0.,height=250,margin=dict(l=8,r=8,t=40,b=8))
             return fig
     except Exception: pass
     return None
-
-def make_multi_chart_dashboard(df):
-    nc=smart_numeric_cols(df); cc=smart_cat_cols(df)
-    dc=[c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-    figs=[]
-    try:
-        if cc and nc:
-            g=df.groupby(cc[0])[nc[0]].sum().reset_index().sort_values(nc[0],ascending=False).head(10)
-            f=make_chart(g,"bar",{"x":cc[0],"y":nc[0],"title":f"{nc[0]} by {cc[0]}"}); 
-            if f: figs.append(("Revenue by Category",f))
-        if dc and nc:
-            td=df.copy(); td["_dt"]=pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
-            td2=td.groupby("_dt")[nc[0]].sum().reset_index()
-            f=make_chart(td2,"line",{"x":"_dt","y":nc[0],"title":f"{nc[0]} trend over time"})
-            if f: figs.append(("Trend Over Time",f))
-        if len(nc)>=2:
-            f=make_chart(df.sample(min(200,len(df))),"scatter",
-                         {"x":nc[0],"y":nc[1],"title":f"{nc[0]} vs {nc[1]}"})
-            if f: figs.append(("Correlation",f))
-        if len(nc)>=3:
-            f=make_chart(df,"heatmap",{"title":"Correlation Matrix"})
-            if f: figs.append(("Correlation Matrix",f))
-        if cc and nc and len(cc)>=1:
-            g2=df.groupby(cc[0])[nc[0]].sum().reset_index()
-            f=make_chart(g2,"donut",{"x":cc[0],"y":nc[0],"title":f"Share of {nc[0]}"})
-            if f: figs.append(("Market Share",f))
-        if len(nc)>=1:
-            f=make_chart(df,"histogram",{"x":nc[0],"title":f"Distribution of {nc[0]}"})
-            if f: figs.append(("Distribution",f))
-    except Exception: pass
-    return figs
 
 # ─────────────────────────────────────────────────────────────────────
 #  PDF EXPORT  — professional, fully validated
@@ -1369,20 +1752,110 @@ if st.session_state.get("show_dna"):
         st.markdown(f'<div class="dna-grid">{cards}</div>',unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
-#  AUTO-DASHBOARD
+#  AUTO-DASHBOARD  — Power BI style
 # ─────────────────────────────────────────────────────────────────────
 if st.session_state.get("show_autodash"):
-    st.markdown('<div class="div">🚀 Auto-Dashboard — Full Dataset Overview</div>',unsafe_allow_html=True)
-    for dn,dd in st.session_state.dataframes.items():
-        st.markdown(f"**{dn}** — {len(dd):,} rows × {len(dd.columns)} columns")
-        dash_figs=make_multi_chart_dashboard(dd)
-        if dash_figs:
-            cols=st.columns(2)
-            for i,(label,fg) in enumerate(dash_figs):
-                with cols[i%2]:
-                    st.markdown(f'<div style="font-family:var(--fm);font-size:9px;color:var(--t3);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">{label}</div>',unsafe_allow_html=True)
-                    st.plotly_chart(fg,use_container_width=True,key=f"ad_{dn}_{i}")
-        else: st.info("Not enough columns for auto-dashboard.")
+    st.markdown('<div class="div">🚀 Auto-Dashboard — Power BI Style Overview</div>', unsafe_allow_html=True)
+
+    for dn, dd in st.session_state.dataframes.items():
+        dash = make_powerbi_dashboard(dd, dn)
+        nc   = smart_numeric_cols(dd)
+        cc   = smart_cat_cols(dd)
+
+        # ── Header ──────────────────────────────────────────────────
+        st.markdown(f"""<div class="pbi-wrap">
+          <div class="pbi-header">
+            <div>
+              <div class="pbi-title">📊 {dn.replace("_"," ").title()}</div>
+              <div class="pbi-subtitle">
+                {len(dd):,} rows · {len(dd.columns)} columns ·
+                {len(nc)} numeric · {len(cc)} categorical
+              </div>
+            </div>
+            <div class="pbi-stamp">
+              Generated {datetime.now().strftime("%d %b %Y · %H:%M")}
+            </div>
+          </div>""", unsafe_allow_html=True)
+
+        # ── KPI Strip ───────────────────────────────────────────────
+        if dash["kpis"]:
+            st.markdown('<div class="pbi-kpi-strip">', unsafe_allow_html=True)
+            kpi_html = ""
+            for kpi in dash["kpis"]:
+                delta_html = ""
+                if kpi.get("delta"):
+                    is_up  = "+" in str(kpi["delta"])
+                    arrow  = "▲" if is_up else "▼"
+                    cls    = "up" if is_up else "dn"
+                    delta_html = (f'<div class="pbi-kpi-delta {cls}">'
+                                  f'{arrow} {kpi["delta"]}'
+                                  f'</div>')
+                kpi_html += (
+                    f'<div class="pbi-kpi" style="--kc:{kpi["color"]}">'
+                    f'<style>.pbi-kpi[style="--kc:{kpi["color"]}"]:before{{background:{kpi["color"]}}}</style>'
+                    f'<span class="pbi-kpi-icon">{kpi["icon"]}</span>'
+                    f'<span class="pbi-kpi-val" style="color:{kpi["color"]}">{kpi["value"]}</span>'
+                    f'<span class="pbi-kpi-lbl">{kpi["label"]}</span>'
+                    f'<span class="pbi-kpi-avg">avg {kpi["avg"]}</span>'
+                    f'{delta_html}'
+                    f'</div>'
+                )
+            st.markdown(kpi_html + '</div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)  # close pbi-wrap header portion
+
+        # ── Charts Grid ─────────────────────────────────────────────
+        charts = dash["charts"]
+        if charts:
+            # Row 1: 2 wide charts
+            if len(charts) >= 2:
+                col1, col2 = st.columns(2)
+                for ci, col in enumerate([col1, col2]):
+                    if ci < len(charts):
+                        lbl, fig = charts[ci]
+                        with col:
+                            st.markdown(f'<div class="pbi-chart-label">{lbl}</div>',
+                                        unsafe_allow_html=True)
+                            st.plotly_chart(fig, use_container_width=True,
+                                            key=f"pbi_{dn}_{ci}")
+
+            # Row 2: 3 medium charts
+            if len(charts) >= 5:
+                col1, col2, col3 = st.columns(3)
+                for ci, col in enumerate([col1, col2, col3]):
+                    idx = ci + 2
+                    if idx < len(charts):
+                        lbl, fig = charts[idx]
+                        with col:
+                            st.markdown(f'<div class="pbi-chart-label">{lbl}</div>',
+                                        unsafe_allow_html=True)
+                            st.plotly_chart(fig, use_container_width=True,
+                                            key=f"pbi_{dn}_{idx}")
+
+            # Row 3: remaining charts
+            remaining = charts[5:]
+            if remaining:
+                rcols = st.columns(min(2, len(remaining)))
+                for ci, (lbl, fig) in enumerate(remaining):
+                    with rcols[ci % len(rcols)]:
+                        st.markdown(f'<div class="pbi-chart-label">{lbl}</div>',
+                                    unsafe_allow_html=True)
+                        st.plotly_chart(fig, use_container_width=True,
+                                        key=f"pbi_{dn}_r{ci}")
+        else:
+            st.info(f"Not enough column types to build a full dashboard for {dn}.")
+
+        # ── Footer ──────────────────────────────────────────────────
+        st.markdown(f"""<div style="background:var(--base);border:1px solid var(--bd0);
+            border-radius:0 0 var(--r3) var(--r3);padding:10px 20px;
+            display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:-8px">
+          <span style="font-family:var(--fm);font-size:9px;color:var(--t3)">
+            NLDA Pro · Auto-Dashboard · {dn}
+          </span>
+          <span style="font-family:var(--fm);font-size:9px;color:var(--t3)">
+            {len(charts)} charts · {len(nc)} metrics analysed
+          </span>
+        </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
 #  COMPARE MODE
@@ -1497,27 +1970,75 @@ if st.session_state.get("show_story"):
         if st.button("🔄 Regenerate", key="regen_story"):
             st.session_state.story_cache.pop(story_key, None); st.rerun()
     with c2:
-        if st.button("📋 Show raw text", key="copy_story"):
-            st.code(cached, language=None)
+        show_raw = st.session_state.get("story_show_raw", False)
+        if st.button("📋 Hide raw text" if show_raw else "📋 Show raw text", key="copy_story"):
+            st.session_state["story_show_raw"] = not show_raw; st.rerun()
+    if st.session_state.get("story_show_raw", False):
+        st.code(cached, language=None)
 
 # ─────────────────────────────────────────────────────────────────────
-#  TIMELINE
+#  TIMELINE  — works always, shows placeholder when no queries yet
 # ─────────────────────────────────────────────────────────────────────
-if st.session_state.get("show_timeline") and st.session_state.chat_history:
-    st.markdown('<div class="div">⏱ Insight Timeline</div>',unsafe_allow_html=True)
-    cols_c=["#f0c040","#a78bfa","#22d3ee","#34d399","#fb7185","#fbbf24","#f472b6","#38bdf8"]
-    tl='<div class="timeline">'
-    for i,e in enumerate(st.session_state.chat_history):
-        dc=cols_c[i%len(cols_c)]
-        ins=e.get("insights",[""])[0][:85] if e.get("insights") else ""
-        tl+=(f'<div class="tl-item"><div class="tl-dot" style="background:{dc}"></div>'
-             f'<div class="tl-time">Query {i+1} · {e.get("ts","")}</div>'
-             f'<div class="tl-q">{e["question"]}</div>'
-             f'<div class="tl-a">{e.get("summary","")[:110]}</div>'
-             f'{"<div style=font-size:11px;color:"+dc+";margin-top:3px>↳ "+ins+"</div>" if ins else ""}'
-             f'</div>')
-    tl+='</div>'
-    st.markdown(tl,unsafe_allow_html=True)
+if st.session_state.get("show_timeline"):
+    st.markdown('<div class="div">⏱ Insight Timeline — Every Query at a Glance</div>', unsafe_allow_html=True)
+    if not st.session_state.chat_history:
+        st.markdown("""
+        <div style="background:var(--raised);border:1px dashed var(--bd2);border-radius:var(--r3);
+            padding:36px;text-align:center;color:var(--t3);">
+            <div style="font-size:32px;margin-bottom:10px">⏱</div>
+            <div style="font-family:var(--fd);font-size:15px;font-weight:700;color:var(--t2);margin-bottom:6px">
+                No queries yet
+            </div>
+            <div style="font-size:13px;line-height:1.6">
+                Run your first analysis below and the timeline will<br>
+                automatically track every query, insight, and finding.
+            </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        dot_colors = ["#f0c040","#a78bfa","#22d3ee","#34d399","#fb7185","#fbbf24","#f472b6","#38bdf8"]
+        conf_icons = {"high":"✦","medium":"◆","low":"▲"}
+
+        tl = '<div class="timeline">'
+        for i, e in enumerate(st.session_state.chat_history):
+            dc   = dot_colors[i % len(dot_colors)]
+            ins  = e.get("insights", [""])[0][:100] if e.get("insights") else ""
+            conf = e.get("confidence","high")
+            ci   = conf_icons.get(conf,"✦")
+            kpi_badges = "".join(
+                f'<span style="display:inline-block;background:{dc}18;border:1px solid {dc}40;'
+                f'border-radius:4px;font-family:var(--fm);font-size:9px;color:{dc};'
+                f'padding:1px 7px;margin-right:5px;margin-top:4px">'
+                f'{k.get("label","")}: {k.get("value","")}</span>'
+                for k in e.get("kpis",[])[:3]
+            )
+            tl += (
+                f'<div class="tl-item">'
+                f'<div class="tl-dot" style="background:{dc}"></div>'
+                f'<div class="tl-time">Query {i+1} · {e.get("ts","")} · {ci} {conf} confidence · {e.get("provider","AI")}</div>'
+                f'<div class="tl-q">{e["question"]}</div>'
+                f'<div class="tl-a">{e.get("summary","")[:130]}</div>'
+                f'{f"""<div style="font-size:12px;color:{dc};margin-top:4px;font-style:italic">↳ {ins}</div>""" if ins else ""}'
+                f'{f"""<div style="margin-top:6px">{kpi_badges}</div>""" if kpi_badges else ""}'
+                f'</div>'
+            )
+        tl += '</div>'
+        st.markdown(tl, unsafe_allow_html=True)
+
+        # Mini summary bar
+        total_insights = sum(len(e.get("insights",[])) for e in st.session_state.chat_history)
+        total_charts   = sum(1 for e in st.session_state.chat_history if e.get("fig"))
+        st.markdown(
+            f'<div style="display:flex;gap:20px;padding:12px 16px;background:var(--raised);'
+            f'border:1px solid var(--bd1);border-radius:var(--r2);margin-top:8px;flex-wrap:wrap">'
+            f'<span style="font-family:var(--fm);font-size:10px;color:var(--t3)">Total queries: '
+            f'<b style="color:var(--gold)">{len(st.session_state.chat_history)}</b></span>'
+            f'<span style="font-family:var(--fm);font-size:10px;color:var(--t3)">Insights generated: '
+            f'<b style="color:var(--cyan)">{total_insights}</b></span>'
+            f'<span style="font-family:var(--fm);font-size:10px;color:var(--t3)">Charts rendered: '
+            f'<b style="color:var(--violet)">{total_charts}</b></span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
 # ─────────────────────────────────────────────────────────────────────
 #  CHART COMPOSER  — v5.0: industry presets + smart column mapping
