@@ -109,6 +109,20 @@ h1,h2,h3,h4{font-family:var(--fd)!important;letter-spacing:-.02em;}
 .stButton>button:active{transform:translateY(0)!important;opacity:.85!important;}
 button[data-testid="baseButton-primary"]{background:linear-gradient(135deg,#c8980e,#f0c040)!important;color:#05060a!important;border:none!important;border-radius:var(--r2)!important;font-family:var(--fd)!important;font-size:15px!important;font-weight:700!important;padding:12px 30px!important;white-space:nowrap!important;min-height:46px!important;box-shadow:0 4px 24px rgba(240,192,64,.3)!important;}
 button[data-testid="baseButton-primary"]:hover{box-shadow:0 8px 40px rgba(240,192,64,.5)!important;transform:translateY(-2px)!important;color:#05060a!important;}
+
+/* PRESET PILL BUTTONS — fixed height, never wrap */
+.preset-pill-row{display:flex;gap:10px;flex-wrap:nowrap;overflow-x:auto;padding:4px 2px 12px;scrollbar-width:thin;scrollbar-color:var(--bd2) transparent;}
+.preset-pill-row::-webkit-scrollbar{height:4px;}
+.preset-pill-row::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px;}
+.preset-pill{flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  background:var(--raised);border:1px solid var(--bd1);border-radius:50px;
+  padding:10px 18px;cursor:pointer;transition:all .18s;
+  font-family:var(--fb);font-size:12px;font-weight:600;
+  color:var(--t2);white-space:nowrap;user-select:none;}
+.preset-pill:hover{border-color:var(--gold);color:var(--gold);background:var(--gd);transform:translateY(-2px);box-shadow:0 4px 16px rgba(240,192,64,.15);}
+.preset-pill.active{border-color:var(--gold);color:var(--gold);background:var(--gd);box-shadow:0 0 0 2px rgba(240,192,64,.2);}
+.preset-pill .pill-icon{font-size:16px;line-height:1;}
+.preset-pill .pill-label{letter-spacing:.01em;}
 /* TEXT INPUT */
 .stTextInput>div>div>input,.stTextArea>div>div>textarea{background:var(--raised)!important;border:1px solid var(--bd1)!important;border-radius:var(--r2)!important;color:var(--t1)!important;font-family:var(--fb)!important;font-size:16px!important;padding:14px 20px!important;transition:border-color .2s!important;}
 .stTextInput>div>div>input:focus,.stTextArea>div>div>textarea:focus{border-color:var(--gold)!important;box-shadow:0 0 0 3px var(--gd)!important;}
@@ -1060,21 +1074,31 @@ Style: Write like a McKinsey partner presenting to a board. Authoritative, direc
 
 Return ONLY the story — no JSON, no markdown headers, no section labels."""
 
-QUERY_STORY_PROMPT = """You are a data analyst explaining a specific analysis result to a business stakeholder.
+QUERY_STORY_PROMPT = """You are explaining a data chart to someone who has never studied statistics or business analytics. They are a curious, intelligent person but not a data expert.
 
-Query: {question}
-Result summary: {summary}
-Key insights: {insights}
-KPIs found: {kpis}
-Data context: {schema_snippet}
+Chart/Query: {question}
+What the numbers show: {summary}
+Key findings: {insights}
+Important numbers: {kpis}
+About the data: {schema_snippet}
 
-Write a 2-paragraph narrative explanation:
+Write 3 short paragraphs that any person can understand:
 
-Paragraph 1 (What the data shows): Explain what this specific analysis found. Use the actual numbers from the insights and KPIs. Make it conversational but precise. Explain any surprising elements.
+Paragraph 1 — WHAT'S HAPPENING (The simple truth):
+Explain in everyday language what this chart shows. Imagine you're telling a friend over coffee. Avoid jargon. Use analogies if helpful. Lead with the most surprising or important number.
 
-Paragraph 2 (What to do about it): Translate the findings into business implications. What decision should be made? What should be monitored? What is the risk of inaction?
+Paragraph 2 — WHY IT MATTERS (So what?):
+Explain why a normal person should care about this. What does it mean for the business, the people, or daily decisions? Connect it to real-world outcomes. What could happen if this trend continues?
 
-Write in plain English. No bullet points. No headers. 3-4 sentences per paragraph. Use specific numbers throughout."""
+Paragraph 3 — WHAT TO DO (The action):
+Give 1-2 concrete actions that a manager or team could take based on this data. Make it specific and practical — not "improve performance" but "focus sales team on the North America region which generates 3x more revenue per deal."
+
+Rules:
+- Write like you're texting a smart friend, not writing a report
+- Every number you mention must be from the actual data provided
+- No bullet points, no headers, no jargon (no "KPI", "metric", "leverage", "synergy")
+- Maximum 3 sentences per paragraph
+- If you don't have specific numbers, say "roughly" or "about" — never make up exact figures"""
 
 def call_ai(question, schemas, history, extra=""):
     ctx="\n".join(f"Q:{h['question']}\nA:{h.get('summary','')}" for h in history[-4:]) or "(none)"
@@ -1396,63 +1420,85 @@ if st.session_state.get("compare_mode"):
                 st.markdown('</div>',unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
-#  DATA STORY  — v5.0: full 6-section story of entire dataset
+#  DATA STORY  — works with OR without prior queries
 # ─────────────────────────────────────────────────────────────────────
 if st.session_state.get("show_story"):
-    st.markdown('<div class="div">📖 AI Data Story — Full Dataset Narrative</div>',unsafe_allow_html=True)
-    if not st.session_state.chat_history:
-        st.info("Run at least 2-3 queries first, then the AI will write a comprehensive story about your entire dataset.")
-    else:
-        # Build rich dataset summary for the story
-        ds_summary_parts=[]
-        for dn,dd in st.session_state.dataframes.items():
-            nc=smart_numeric_cols(dd); cc=smart_cat_cols(dd)
-            stats_lines=[f"Dataset: {dn} ({len(dd):,} rows, {len(dd.columns)} columns)"]
-            for col in nc[:6]:
-                try: stats_lines.append(f"  {col}: mean={dd[col].mean():.2f}, min={dd[col].min():.2f}, max={dd[col].max():.2f}, total={dd[col].sum():.2f}")
-                except: pass
-            for col in cc[:3]:
-                top=dd[col].value_counts().head(3)
-                stats_lines.append(f"  {col} top values: {', '.join(f'{k}({v})' for k,v in top.items())}")
-            ds_summary_parts.append("\n".join(stats_lines))
-        dataset_summary="\n\n".join(ds_summary_parts)
+    st.markdown('<div class="div">📖 AI Data Story — Full Dataset Narrative</div>', unsafe_allow_html=True)
 
-        def _fmt_e(i,e):
-            kpi_str="; ".join(f"{k.get('label')}={k.get('value')}" for k in e.get("kpis",[]))
-            return (f"Analysis {i+1}: {e['question']}\n"
-                    f"Finding: {e.get('summary','')}\n"
-                    f"Insights: {'; '.join(e.get('insights',[]))}\n"
-                    f"KPIs: {kpi_str}")
-        analyses="\n\n".join(_fmt_e(i,e) for i,e in enumerate(st.session_state.chat_history[-10:]))
+    # Build rich dataset summary regardless of query history
+    ds_summary_parts = []
+    for dn, dd in st.session_state.dataframes.items():
+        nc = smart_numeric_cols(dd); cc2 = smart_cat_cols(dd)
+        lines = [f"Dataset: {dn} ({len(dd):,} rows, {len(dd.columns)} columns)"]
+        for col in nc[:8]:
+            try:
+                lines.append(
+                    f"  {col}: mean={dd[col].mean():.2f}, "
+                    f"min={dd[col].min():.2f}, max={dd[col].max():.2f}, "
+                    f"total={dd[col].sum():.2f}, std={dd[col].std():.2f}"
+                )
+            except: pass
+        for col in cc2[:4]:
+            top = dd[col].value_counts().head(4)
+            lines.append(f"  {col} distribution: {', '.join(f'{k}({v})' for k,v in top.items())}")
+        # Date range if any
+        for col in dd.columns:
+            if pd.api.types.is_datetime64_any_dtype(dd[col]):
+                lines.append(f"  {col} range: {dd[col].min().date()} to {dd[col].max().date()}")
+                break
+        ds_summary_parts.append("\n".join(lines))
+    dataset_summary = "\n\n".join(ds_summary_parts)
 
-        story_key=hashlib.md5((dataset_summary+analyses).encode()).hexdigest()[:8]
-        cached=st.session_state.story_cache.get(story_key)
-        if cached is None:
-            with st.spinner("✍ Writing your comprehensive data story…"):
-                cached=call_full_story(dataset_summary,analyses)
-                st.session_state.story_cache[story_key]=cached
+    # Past queries (optional — empty string if none)
+    def _fmt_e(i, e):
+        kpi_str = "; ".join(f"{k.get('label')}={k.get('value')}" for k in e.get("kpis", []))
+        return (f"Query {i+1}: {e['question']}\n"
+                f"Finding: {e.get('summary','')}\n"
+                f"Insights: {'; '.join(e.get('insights',[]))}\n"
+                f"KPIs: {kpi_str}")
+    analyses = "\n\n".join(_fmt_e(i, e) for i, e in enumerate(st.session_state.chat_history[-10:])) \
+               if st.session_state.chat_history else "(No queries run yet — story is based entirely on raw dataset statistics above.)"
 
-        # Render with rich formatting
-        paras=[p.strip() for p in cached.split("\n\n") if p.strip()]
-        section_titles=["The Headline Discovery","The Pattern in the Data","Who Is Winning",
-                        "The Hidden Risk","The Root Cause","Monday Morning Actions"]
-        st.markdown(f"""<div class="story-wrap">
-            <div class="story-eyebrow">AI Data Story · {len(st.session_state.chat_history)} analyses · {len(st.session_state.dataframes)} dataset(s)</div>
-            <div class="story-headline">Comprehensive Business Intelligence Narrative</div>""",
+    story_key = hashlib.md5((dataset_summary + analyses).encode()).hexdigest()[:8]
+    cached = st.session_state.story_cache.get(story_key)
+
+    if cached is None:
+        with st.spinner("✍ Writing your comprehensive data story…"):
+            cached = call_full_story(dataset_summary, analyses)
+            st.session_state.story_cache[story_key] = cached
+
+    # Render story
+    paras = [p.strip() for p in cached.split("\n\n") if p.strip()]
+    section_titles = ["The Headline Discovery", "The Pattern in the Data",
+                      "Who Is Winning", "The Hidden Risk",
+                      "The Root Cause", "Monday Morning Actions"]
+    section_colors = ["#f0c040", "#22d3ee", "#34d399", "#fb7185", "#a78bfa", "#fbbf24"]
+
+    st.markdown(f"""<div class="story-wrap">
+        <div class="story-eyebrow">
+            AI Data Story · {len(st.session_state.dataframes)} dataset(s) ·
+            {len(st.session_state.chat_history)} {'analyses' if st.session_state.chat_history else 'queries (raw stats mode)'}
+        </div>
+        <div class="story-headline">Comprehensive Business Intelligence Narrative</div>
+    """, unsafe_allow_html=True)
+
+    for i, para in enumerate(paras):
+        sec = section_titles[i] if i < len(section_titles) else f"Section {i+1}"
+        col = section_colors[i] if i < len(section_colors) else "#94a3b8"
+        st.markdown(
+            f'<div class="story-chapter" style="color:{col}">{sec}</div>'
+            f'<p style="font-size:15px;color:var(--t1);line-height:1.9;margin:0 0 10px">{para}</p>',
             unsafe_allow_html=True)
-        for i,para in enumerate(paras):
-            sec_title=section_titles[i] if i<len(section_titles) else f"Section {i+1}"
-            st.markdown(f'<div class="story-chapter">{sec_title}</div>',unsafe_allow_html=True)
-            st.markdown(f'<p style="font-size:15px;color:var(--t1);line-height:1.9;margin:0 0 8px">{para}</p>',unsafe_allow_html=True)
-        st.markdown('</div>',unsafe_allow_html=True)
 
-        c1,c2,_=st.columns([1,1,5])
-        with c1:
-            if st.button("🔄 Regenerate",key="regen_story"):
-                st.session_state.story_cache.pop(story_key,None); st.rerun()
-        with c2:
-            if st.button("📋 Copy Text",key="copy_story"):
-                st.code(cached,language=None)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    c1, c2, _ = st.columns([1, 1, 5])
+    with c1:
+        if st.button("🔄 Regenerate", key="regen_story"):
+            st.session_state.story_cache.pop(story_key, None); st.rerun()
+    with c2:
+        if st.button("📋 Show raw text", key="copy_story"):
+            st.code(cached, language=None)
 
 # ─────────────────────────────────────────────────────────────────────
 #  TIMELINE
@@ -1483,102 +1529,97 @@ if st.session_state.get("show_composer"):
         # Dataset selector
         cds=st.selectbox("Select Dataset",dnames,key="comp_ds")
         cdf=st.session_state.dataframes[cds]
-        # ── Industry Preset Buttons — single row, each instantly renders ──
+        # ── Industry Preset Pills ─────────────────────────────────────
         st.markdown("""<div style="font-family:var(--fm);font-size:9px;color:var(--t3);
-            letter-spacing:.2em;text-transform:uppercase;margin:14px 0 10px">
-            Industry Presets — Click to instantly generate chart & insights
+            letter-spacing:.22em;text-transform:uppercase;margin:16px 0 10px;
+            display:flex;align-items:center;gap:8px">
+            <span style="width:16px;height:1px;background:var(--t3);display:inline-block"></span>
+            Industry Presets — Click to instantly generate chart &amp; insights
+            <span style="flex:1;height:1px;background:var(--bd0);display:inline-block"></span>
         </div>""", unsafe_allow_html=True)
 
-        preset_names = list(INDUSTRY_PRESETS.keys())
-        preset_cols  = st.columns(len(preset_names))
+        active_preset = st.session_state.get("selected_preset", "")
 
-        for col, pname in zip(preset_cols, preset_names):
-            pdata = INDUSTRY_PRESETS[pname]
-            is_active = st.session_state.get("selected_preset") == pname
-            # Highlight active preset with gold border via inline CSS trick
-            label = f"{pdata['icon']} {pname}"
-            with col:
-                if st.button(label, key=f"preset_{pname}",
-                             help=pdata["desc"]):
-                    # 1. Store selection
-                    st.session_state["selected_preset"] = pname
+        # Build pill HTML
+        pills_html = '<div class="preset-pill-row">'
+        for pname, pdata in INDUSTRY_PRESETS.items():
+            ac = "active" if pname == active_preset else ""
+            pills_html += (
+                f'<div class="preset-pill {ac}">'
+                f'<span class="pill-icon">{pdata["icon"]}</span>'
+                f'<span class="pill-label">{pname}</span>'
+                f'</div>'
+            )
+        pills_html += '</div>'
+        st.markdown(pills_html, unsafe_allow_html=True)
 
-                    # 2. Auto-resolve columns
-                    ax = _pick_col(cdf, pdata.get("x_pref") or [])
-                    ay = _pick_col(cdf, pdata.get("y_pref") or [])
-                    ac = _pick_col(cdf, pdata.get("color_pref") or [])
-                    ct_val = pdata["chart"]
-
-                    st.session_state["comp_x_val"]     = ax or "(auto)"
-                    st.session_state["comp_y_val"]     = ay or "(auto)"
-                    st.session_state["comp_col_val"]   = ac or "(none)"
-                    st.session_state["comp_ct_val"]    = ct_val
-                    st.session_state["comp_title_val"] = f"{pname} Analysis"
-
-                    # 3. Immediately render chart and store it
-                    fc_preset = {
-                        "x":     ax,
-                        "y":     ay,
-                        "color": ac,
-                        "title": f"{pname} Analysis"
-                    }
-                    fg_preset = make_chart(cdf, ct_val, fc_preset)
-                    st.session_state["comp_preset_fig"]   = fg_preset
-                    st.session_state["comp_preset_name"]  = pname
-                    st.session_state["comp_preset_desc"]  = pdata["desc"]
-
-                    # 4. Auto-generate insights query and run it
-                    preset_query = {
-                        "Sales Performance":   f"Show top performers by revenue with breakdown by {ax or 'category'}",
-                        "Trend Analysis":      f"Show the trend of {ay or 'revenue'} over time",
-                        "Distribution":        f"Show the distribution and outliers of {ay or 'revenue'} by {ax or 'category'}",
-                        "Part-of-Whole":       f"Show the share of {ay or 'revenue'} by {ax or 'category'} as a percentage",
-                        "Correlation":         f"Show the correlation between {ax or 'spend'} and {ay or 'revenue'}",
-                        "Marketing ROI":       f"Show ROAS and ROI by {ax or 'channel'} with revenue attribution",
-                        "HR Analytics":        f"Show {ay or 'salary'} distribution by {ax or 'department'}",
-                        "Operations":          f"Show the correlation matrix of all operational metrics",
-                        "Funnel / Pipeline":   f"Show the conversion funnel from {ax or 'stage'} by {ay or 'count'}",
-                        "Geographic":          f"Show {ay or 'revenue'} by {ax or 'region'} ranked highest to lowest",
-                    }.get(pname, f"Analyze {pname.lower()} metrics and show key insights")
-
-                    st.session_state["comp_preset_query"] = preset_query
-                    st.rerun()
+        # Real Streamlit selectbox hidden below — selecting triggers rerun
+        # We map the pill click via a selectbox (visible but compact)
+        preset_choice = st.selectbox(
+            "Select preset",
+            ["— choose a preset —"] + list(INDUSTRY_PRESETS.keys()),
+            index=(["— choose a preset —"] + list(INDUSTRY_PRESETS.keys())).index(active_preset)
+                  if active_preset in INDUSTRY_PRESETS else 0,
+            key="preset_select_box",
+            label_visibility="collapsed",
+        )
+        if preset_choice != "— choose a preset —" and preset_choice != active_preset:
+            pdata = INDUSTRY_PRESETS[preset_choice]
+            ax  = _pick_col(cdf, pdata.get("x_pref") or [])
+            ay  = _pick_col(cdf, pdata.get("y_pref") or [])
+            ac2 = _pick_col(cdf, pdata.get("color_pref") or [])
+            st.session_state["selected_preset"]   = preset_choice
+            st.session_state["comp_x_val"]         = ax  or "(auto)"
+            st.session_state["comp_y_val"]         = ay  or "(auto)"
+            st.session_state["comp_col_val"]       = ac2 or "(none)"
+            st.session_state["comp_ct_val"]        = pdata["chart"]
+            st.session_state["comp_title_val"]     = f"{preset_choice} Analysis"
+            fc_p = {"x": ax, "y": ay, "color": ac2, "title": f"{preset_choice} Analysis"}
+            st.session_state["comp_preset_fig"]    = make_chart(cdf, pdata["chart"], fc_p)
+            st.session_state["comp_preset_name"]   = preset_choice
+            st.session_state["comp_preset_desc"]   = pdata["desc"]
+            st.session_state["comp_preset_query"]  = {
+                "Sales Performance":  f"Show top performers by revenue with breakdown by {ax or 'category'}",
+                "Trend Analysis":     f"Show the trend of {ay or 'revenue'} over time",
+                "Distribution":       f"Show the distribution and outliers of {ay or 'revenue'} by {ax or 'category'}",
+                "Part-of-Whole":      f"Show the share of {ay or 'revenue'} by {ax or 'category'} as a percentage",
+                "Correlation":        f"Show the correlation between {ax or 'spend'} and {ay or 'revenue'}",
+                "Marketing ROI":      f"Show ROAS and ROI by {ax or 'channel'} with revenue attribution",
+                "HR Analytics":       f"Show {ay or 'salary'} distribution by {ax or 'department'}",
+                "Operations":         f"Show the correlation matrix of all operational metrics",
+                "Funnel / Pipeline":  f"Show the conversion funnel from {ax or 'stage'} by {ay or 'count'}",
+                "Geographic":         f"Show {ay or 'revenue'} by {ax or 'region'} ranked highest to lowest",
+            }.get(preset_choice, f"Analyze {preset_choice.lower()} metrics")
+            st.rerun()
 
         # Show active preset result
         if st.session_state.get("comp_preset_fig") is not None:
-            pname_active = st.session_state.get("comp_preset_name", "")
-            pdesc_active = st.session_state.get("comp_preset_desc", "")
+            pname_a = st.session_state.get("comp_preset_name", "")
+            pdesc_a = st.session_state.get("comp_preset_desc", "")
             st.markdown(f"""<div style="display:flex;align-items:center;gap:10px;margin:16px 0 8px">
-                <span style="font-family:var(--fd);font-size:14px;font-weight:700;color:var(--gold)">{pname_active}</span>
-                <span style="font-family:var(--fm);font-size:10px;color:var(--t3)">{pdesc_active}</span>
+                <span style="font-family:var(--fd);font-size:14px;font-weight:700;color:var(--gold)">{pname_a}</span>
+                <span style="font-family:var(--fm);font-size:10px;color:var(--t3)">{pdesc_a}</span>
             </div>""", unsafe_allow_html=True)
             st.plotly_chart(st.session_state["comp_preset_fig"],
                             use_container_width=True, key="comp_preset_chart")
-
-            # Run preset insight query button
-            pq = st.session_state.get("comp_preset_query", "")
-            pq_col1, pq_col2 = st.columns([2, 5])
-            with pq_col1:
-                if st.button(f"💡 Get {pname_active} Insights",
-                             key="preset_insights_btn", type="primary"):
-                    st.session_state["_prefill"] = pq
-                    # Also run it directly
+            pq = st.session_state.get("comp_preset_query","")
+            pq1, pq2 = st.columns([2,5])
+            with pq1:
+                if st.button(f"💡 Get {pname_a} Insights", key="preset_ins_btn", type="primary"):
                     prog_ph = st.empty()
                     try:
-                        preset_entry = run_query(pq, prog_ph)
-                        st.session_state.chat_history.append(preset_entry)
+                        pe = run_query(pq, prog_ph)
+                        st.session_state.chat_history.append(pe)
                         st.session_state.total_queries += 1
-                        st.session_state["query_counter"] = st.session_state.get("query_counter", 0) + 1
+                        st.session_state["query_counter"] = st.session_state.get("query_counter",0)+1
                         st.rerun()
                     except Exception as ex:
                         prog_ph.empty(); st.error(str(ex))
-            with pq_col2:
-                if st.button("📌 Pin this chart", key="pin_preset_chart"):
+            with pq2:
+                if st.button("📌 Pin chart", key="pin_preset_ch"):
                     st.session_state.pinned_charts.append(st.session_state["comp_preset_fig"])
-                    st.success("Chart pinned to dashboard!")
-
-            st.markdown('<div style="margin:16px 0;border-top:1px solid var(--bd0)"></div>',
-                        unsafe_allow_html=True)
+                    st.success("Pinned!")
+            st.markdown('<div style="margin:16px 0;border-top:1px solid var(--bd0)"></div>', unsafe_allow_html=True)
 
         # ── Manual Builder ──────────────────────────────────────────
         st.markdown('<div style="font-family:var(--fm);font-size:9px;color:var(--t3);letter-spacing:.2em;text-transform:uppercase;margin:14px 0 8px">Manual Chart Builder</div>',unsafe_allow_html=True)
@@ -1773,35 +1814,54 @@ if st.session_state.chat_history:
                         if st.button(f"↗ {q}",key=f"fq_{entry['id']}_{q[:14]}"):
                             st.session_state["_prefill"]=q; st.rerun()
 
-        with rt[3]:  # PER-QUERY STORY — v5.0 new tab
-            qs=entry.get("query_story","").strip()
+        with rt[3]:  # PER-QUERY STORY — plain English for anyone
+            qs = entry.get("query_story", "").strip()
+            plain_labels = [
+                ("💬", "What's Happening", "#f0c040"),
+                ("🎯", "Why It Matters",   "#22d3ee"),
+                ("✅", "What To Do",       "#34d399"),
+            ]
             if qs:
-                paras=[p.strip() for p in qs.split("\n\n") if p.strip()]
-                sec_labels=["What the Data Shows","What To Do About It","Additional Context"]
-                st.markdown('<div class="qstory-wrap">',unsafe_allow_html=True)
-                st.markdown(f'<div class="qstory-lbl">Query Analysis Story · {entry.get("ts","")}</div>',unsafe_allow_html=True)
-                for i,para in enumerate(paras):
-                    lbl=sec_labels[i] if i<len(sec_labels) else f"Part {i+1}"
-                    st.markdown(f'<div style="font-family:var(--fm);font-size:8px;color:var(--violet);letter-spacing:.15em;text-transform:uppercase;margin:12px 0 5px">{lbl}</div>',unsafe_allow_html=True)
-                    st.markdown(f'<div class="qstory-text">{para}</div>',unsafe_allow_html=True)
-                st.markdown('</div>',unsafe_allow_html=True)
+                paras_qs = [p.strip() for p in qs.split("\n\n") if p.strip()]
+                st.markdown('<div class="qstory-wrap">', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="qstory-lbl">📖 Chart Story — Written for everyone</div>',
+                    unsafe_allow_html=True)
+                for i, para in enumerate(paras_qs):
+                    icon, lbl, clr = plain_labels[i] if i < len(plain_labels) else ("•", f"Part {i+1}", "#94a3b8")
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:7px;'
+                        f'font-family:var(--fm);font-size:9px;color:{clr};'
+                        f'letter-spacing:.18em;text-transform:uppercase;margin:14px 0 5px">'
+                        f'{icon} {lbl}</div>'
+                        f'<div class="qstory-text">{para}</div>',
+                        unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
-                # Regenerate button
-                if st.button("🔄 Regenerate Story",key=f"regen_qs_{entry['id']}"):
-                    schema_snip="\n\n".join(df_schema_str(df,n)[:300] for n,df in st.session_state.dataframes.items())
-                    with st.spinner("Writing narrative…"):
-                        new_story=call_query_story(
-                            entry["question"],entry.get("summary",""),
-                            entry.get("insights",[]),entry.get("kpis",[]),schema_snip)
-                    st.session_state.chat_history[idx]["query_story"]=new_story; st.rerun()
+                if st.button("🔄 Rewrite Story", key=f"regen_qs_{entry['id']}"):
+                    schema_snip = "\n\n".join(
+                        df_schema_str(df, n)[:300]
+                        for n, df in st.session_state.dataframes.items())
+                    with st.spinner("Rewriting in plain English…"):
+                        ns = call_query_story(
+                            entry["question"], entry.get("summary",""),
+                            entry.get("insights",[]), entry.get("kpis",[]), schema_snip)
+                    st.session_state.chat_history[idx]["query_story"] = ns; st.rerun()
             else:
-                if st.button("✍ Generate Story for This Query",key=f"gen_qs_{entry['id']}"):
-                    schema_snip="\n\n".join(df_schema_str(df,n)[:300] for n,df in st.session_state.dataframes.items())
-                    with st.spinner("Writing narrative…"):
-                        new_story=call_query_story(
-                            entry["question"],entry.get("summary",""),
-                            entry.get("insights",[]),entry.get("kpis",[]),schema_snip)
-                    st.session_state.chat_history[idx]["query_story"]=new_story; st.rerun()
+                st.markdown(
+                    '<div style="padding:24px;text-align:center;color:var(--t3);'
+                    'font-family:var(--fm);font-size:11px">'
+                    'No story yet for this chart.</div>',
+                    unsafe_allow_html=True)
+                if st.button("✍ Generate Plain-English Story", key=f"gen_qs_{entry['id']}", type="primary"):
+                    schema_snip = "\n\n".join(
+                        df_schema_str(df, n)[:300]
+                        for n, df in st.session_state.dataframes.items())
+                    with st.spinner("Writing plain-English story…"):
+                        ns = call_query_story(
+                            entry["question"], entry.get("summary",""),
+                            entry.get("insights",[]), entry.get("kpis",[]), schema_snip)
+                    st.session_state.chat_history[idx]["query_story"] = ns; st.rerun()
 
         with rt[4]:  # SQL
             sql=entry.get("sql_query","").strip()
