@@ -1044,11 +1044,11 @@ def _cover_page(elements, title, subtitle, meta_lines, st_obj, cm, HRFlowable,
     for line in meta_lines:
         elements.append(P(line, styles["sub_s"]))
     if not HAS_KALEIDO:
-        elements.append(Spacer(1,0.3*cm))
-        elements.append(P(
-            "Charts not embedded — install kaleido (pip install kaleido) to include chart images.",
-            ParagraphStyle("n", parent=Paragraph.__class__, fontSize=9,
-                           textColor=DKGRAY, fontName="Helvetica-Oblique")))
+        elements.append(Spacer(1, 0.3*cm))
+        note_p = Paragraph(_st(
+            "Charts not embedded — install kaleido (pip install kaleido) to include chart images."),
+            styles["sub_s"])
+        elements.append(note_p)
     elements.append(Spacer(1, 0.5*cm))
     elements.append(HR(0.5, MDGRAY, 16))
 
@@ -1196,223 +1196,10 @@ def make_pdf(history):
 
 
 # ── REPORT 2: Dashboard PDF ───────────────────────────────────────────
-def make_dashboard_pdf(dataframes, history, story_text=""):
-    """
-    Complete Power BI-style dashboard PDF:
-    • Cover page
-    • Dataset summary stats table per dataset
-    • KPI tile grid
-    • ALL dashboard charts (embedded images via kaleido)
-    • AI Data Story (if provided)
-    • Query analysis appendix
-    """
-    _check_rl()
-    (A4, landscape, getSampleStyleSheet, ParagraphStyle, cm, rc,
-     SimpleDocTemplate, Paragraph, Spacer, HRFlowable, KeepTogether,
-     Table, TableStyle, PageBreak, RLImage, TA_CENTER, TA_LEFT, TA_RIGHT) = _rl_imports()
+# NOTE: The full make_dashboard_pdf is defined later in the file.
+# A forward-reference shim is not needed — Python resolves at call time.
 
-    HAS_KALEIDO = _check_kaleido()
-    sty    = getSampleStyleSheet()
-    styles = _common_styles(sty, rc)
-    GRAY   = styles["GRAY"]; LTGRAY = styles["LTGRAY"]; MDGRAY = styles["MDGRAY"]
-    WHITE  = styles["WHITE"]; BLUE = styles["BLUE"]; VIOLET = styles["VIOLET"]
-    GOLD   = styles["GOLD"]; RED = styles["RED"]
 
-    def P(t, s): return Paragraph(_st(str(t)), s)
-    def HR(thick=0.8, clr=MDGRAY, sp=8): return HRFlowable(width="100%", thickness=thick, color=clr, spaceAfter=sp)
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4,
-                            leftMargin=1.8*cm, rightMargin=1.8*cm,
-                            topMargin=2*cm, bottomMargin=2*cm,
-                            title="NLDA Pro Dashboard Report")
-    elements = []
-    total_rows = sum(len(df) for df in dataframes.values())
-
-    meta = [
-        f"Generated: {datetime.now().strftime('%A, %d %B %Y at %H:%M')}",
-        f"Datasets: {', '.join(dataframes.keys())}",
-        f"Total records: {total_rows:,}",
-        f"Analyses run: {len(history)}",
-        "Chart images: " + ("Embedded (kaleido)" if HAS_KALEIDO else "Not embedded — pip install kaleido"),
-    ]
-    _cover_page(elements, "NLDA Pro", "Dashboard Report",
-                meta, None, cm, HRFlowable, Table, TableStyle,
-                Paragraph, Spacer, styles, HAS_KALEIDO)
-
-    # ── Per-dataset dashboard ─────────────────────────────────────────
-    for dn, df in dataframes.items():
-        elements.append(PageBreak())
-        nc = smart_numeric_cols(df); cc = smart_cat_cols(df)
-
-        # Dataset header
-        hdr_data = [[P(f"Dataset: {dn.replace('_',' ').title()}", styles["ds_title_s"])]]
-        hdr_tbl  = Table(hdr_data, colWidths=[15*cm])
-        hdr_tbl.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,-1),rc.HexColor("#0f172a")),
-            ("LEFTPADDING",(0,0),(-1,-1),16),("TOPPADDING",(0,0),(-1,-1),12),
-            ("BOTTOMPADDING",(0,0),(-1,-1),12),("RIGHTPADDING",(0,0),(-1,-1),16),
-        ]))
-        elements.append(hdr_tbl)
-        elements.append(Spacer(1,.25*cm))
-
-        # Dataset stats table
-        stat_rows = [["Column","Type","Min","Max","Mean","Total","Nulls %"]]
-        for col in nc[:8]:
-            s = df[col].dropna()
-            null_pct = round(df[col].isna().mean()*100, 1)
-            stat_rows.append([
-                _st(col), "numeric",
-                fmt(float(s.min())), fmt(float(s.max())),
-                fmt(float(s.mean())), fmt(float(s.sum())),
-                f"{null_pct}%"
-            ])
-        for col in cc[:4]:
-            null_pct = round(df[col].isna().mean()*100, 1)
-            top = str(df[col].value_counts().index[0]) if len(df[col].value_counts()) else "—"
-            stat_rows.append([_st(col), "category", "—", "—", f"top: {_st(top[:12])}", f"{df[col].nunique()} unique", f"{null_pct}%"])
-
-        stat_tbl = Table(stat_rows, colWidths=[3.5*cm,1.8*cm,1.8*cm,1.8*cm,2*cm,2*cm,1.8*cm], repeatRows=1)
-        stat_tbl.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,0),BLUE),("TEXTCOLOR",(0,0),(-1,0),WHITE),
-            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.5),
-            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY]),
-            ("GRID",(0,0),(-1,-1),0.4,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,BLUE),
-            ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
-            ("LEFTPADDING",(0,0),(-1,-1),5),("RIGHTPADDING",(0,0),(-1,-1),5),
-        ]))
-        elements.append(P("Dataset Statistics", styles["section_s"]))
-        elements.append(stat_tbl)
-        elements.append(Spacer(1,.3*cm))
-
-        # Build dashboard
-        dash = make_powerbi_dashboard(df, dn)
-
-        # KPI tiles as a table row
-        if dash["kpis"]:
-            elements.append(P("Key Performance Indicators", styles["section_s"]))
-            kpi_rows_data = []
-            row = []
-            for ki, kpi in enumerate(dash["kpis"]):
-                delta_str = kpi.get("delta","") or ""
-                cell_content = [
-                    P(kpi["icon"] + " " + kpi["label"], styles["kpi_lbl_s"]),
-                    P(kpi["value"], styles["kpi_val_s"]),
-                    P(f"avg {kpi['avg']}", styles["kpi_lbl_s"]),
-                ]
-                if delta_str:
-                    arrow = "+" if "+" in delta_str else "-"
-                    color = GREEN if "+" in delta_str else RED
-                    ds = ParagraphStyle(f"kd{ki}", parent=sty["Normal"],
-                                        fontSize=9, textColor=color,
-                                        fontName="Helvetica-Bold")
-                    cell_content.append(Paragraph(_st(delta_str), ds))
-                kpi_cell = Table([[c] for c in cell_content], colWidths=[3.2*cm])
-                kpi_cell.setStyle(TableStyle([
-                    ("BACKGROUND",(0,0),(-1,-1),rc.HexColor("#f8fafc")),
-                    ("BOX",(0,0),(-1,-1),1,MDGRAY),
-                    ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
-                    ("LEFTPADDING",(0,0),(-1,-1),6),
-                ]))
-                row.append(kpi_cell)
-                if len(row) == 4 or ki == len(dash["kpis"])-1:
-                    # Pad row to 4 columns
-                    while len(row) < 4: row.append(Spacer(3.2*cm,1))
-                    kpi_rows_data.append(row)
-                    row = []
-
-            if kpi_rows_data:
-                kpi_outer = Table(kpi_rows_data, colWidths=[3.6*cm]*4)
-                kpi_outer.setStyle(TableStyle([
-                    ("VALIGN",(0,0),(-1,-1),"TOP"),
-                    ("LEFTPADDING",(0,0),(-1,-1),3),
-                    ("RIGHTPADDING",(0,0),(-1,-1),3),
-                    ("TOPPADDING",(0,0),(-1,-1),3),
-                    ("BOTTOMPADDING",(0,0),(-1,-1),3),
-                ]))
-                elements.append(kpi_outer)
-                elements.append(Spacer(1,.3*cm))
-
-        # Charts — 2 per row
-        if dash["charts"]:
-            elements.append(P("Visual Analytics", styles["section_s"]))
-            HAS_K = HAS_KALEIDO
-            chart_pairs = []
-            pair = []
-            for ci, (lbl, fig) in enumerate(dash["charts"]):
-                img = _fig_to_image(fig, RLImage, 7.5, 4.2, cm) if HAS_K else None
-                pair.append((lbl, img))
-                if len(pair) == 2:
-                    chart_pairs.append(pair); pair = []
-            if pair:
-                chart_pairs.append(pair)
-
-            for pair in chart_pairs:
-                row_cells = []
-                for lbl, img in pair:
-                    if img:
-                        cell_items = [[P(lbl, styles["chart_lbl_s"])], [img]]
-                    else:
-                        cell_items = [[P(lbl, styles["chart_lbl_s"])],
-                                      [P("[Chart — install kaleido to embed image]",
-                                         ParagraphStyle("nc", parent=sty["Normal"],
-                                         fontSize=8, textColor=MDGRAY))]]
-                    cell_tbl = Table(cell_items, colWidths=[7.8*cm])
-                    cell_tbl.setStyle(TableStyle([
-                        ("BACKGROUND",(0,0),(-1,-1),rc.HexColor("#f8fafc")),
-                        ("BOX",(0,0),(-1,-1),0.8,MDGRAY),
-                        ("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),
-                        ("LEFTPADDING",(0,0),(-1,-1),6),("RIGHTPADDING",(0,0),(-1,-1),6),
-                    ]))
-                    row_cells.append(cell_tbl)
-                # Pad odd pair
-                while len(row_cells) < 2:
-                    row_cells.append(Spacer(7.8*cm, 1))
-                row_tbl = Table([row_cells], colWidths=[8.1*cm, 8.1*cm])
-                row_tbl.setStyle(TableStyle([
-                    ("VALIGN",(0,0),(-1,-1),"TOP"),
-                    ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
-                    ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
-                ]))
-                elements.append(row_tbl)
-                elements.append(Spacer(1,.15*cm))
-
-    # ── AI Data Story ─────────────────────────────────────────────────
-    if story_text and story_text.strip():
-        elements.append(PageBreak())
-        elements.append(P("AI Data Story", styles["h2_s"]))
-        elements.append(HR(1, GOLD, 8))
-        section_titles = ["The Headline Discovery","The Pattern in the Data",
-                          "Who Is Winning","The Hidden Risk",
-                          "The Root Cause","Monday Morning Actions"]
-        paras = [p.strip() for p in story_text.split("\n\n") if p.strip()]
-        for i, para in enumerate(paras):
-            sec = section_titles[i] if i < len(section_titles) else f"Section {i+1}"
-            elements.append(P(sec, styles["h3_s"]))
-            elements.append(P(para, styles["story_s"]))
-        elements.append(Spacer(1,.3*cm))
-
-    # ── Query Appendix ────────────────────────────────────────────────
-    if history:
-        elements.append(PageBreak())
-        elements.append(P("Appendix — Query Analysis Results", styles["h2_s"]))
-        elements.append(HR(0.8, MDGRAY, 8))
-        for i, e in enumerate(history, 1):
-            items = []
-            items.append(P(f"Query {i}: {e.get('question','')}", styles["h3_s"]))
-            items.append(P(e.get("summary",""), styles["body_s"]))
-            if e.get("insights"):
-                for ins in e["insights"]:
-                    items.append(P(f"* {ins}", styles["bullet_s"]))
-            if e.get("kpis"):
-                kpi_str = "  |  ".join(f"{k.get('label')}: {k.get('value')}" for k in e["kpis"][:4])
-                items.append(P(f"KPIs: {kpi_str}", styles["body_s"]))
-            items.append(HR(0.4, MDGRAY, 5))
-            elements.append(KeepTogether(items))
-
-    doc.build(elements)
-    return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────────────────
 #  HTTP LAYER
@@ -1926,28 +1713,29 @@ if st.session_state.get("show_autodash"):
 
         # ── KPI Strip ───────────────────────────────────────────────
         if dash["kpis"]:
-            st.markdown('<div class="pbi-kpi-strip">', unsafe_allow_html=True)
-            kpi_html = ""
+            kpi_html = '<div style="display:flex;gap:12px;flex-wrap:wrap;padding:16px 20px;background:var(--surface);border-bottom:1px solid var(--bd0)">'
             for kpi in dash["kpis"]:
+                clr = kpi["color"]
                 delta_html = ""
                 if kpi.get("delta"):
                     is_up  = "+" in str(kpi["delta"])
                     arrow  = "▲" if is_up else "▼"
-                    cls    = "up" if is_up else "dn"
-                    delta_html = (f'<div class="pbi-kpi-delta {cls}">'
-                                  f'{arrow} {kpi["delta"]}'
-                                  f'</div>')
+                    dclr   = "#34d399" if is_up else "#fb7185"
+                    delta_html = (f'<div style="font-family:var(--fm);font-size:10px;'
+                                  f'color:{dclr};margin-top:3px">{arrow} {kpi["delta"]}</div>')
                 kpi_html += (
-                    f'<div class="pbi-kpi" style="--kc:{kpi["color"]}">'
-                    f'<style>.pbi-kpi[style="--kc:{kpi["color"]}"]:before{{background:{kpi["color"]}}}</style>'
-                    f'<span class="pbi-kpi-icon">{kpi["icon"]}</span>'
-                    f'<span class="pbi-kpi-val" style="color:{kpi["color"]}">{kpi["value"]}</span>'
-                    f'<span class="pbi-kpi-lbl">{kpi["label"]}</span>'
-                    f'<span class="pbi-kpi-avg">avg {kpi["avg"]}</span>'
+                    f'<div style="flex:1;min-width:130px;max-width:200px;'
+                    f'background:var(--raised);border:1px solid var(--bd1);'
+                    f'border-top:3px solid {clr};border-radius:var(--r2);padding:14px 16px;">'
+                    f'<div style="font-size:17px;margin-bottom:6px">{kpi["icon"]}</div>'
+                    f'<div style="font-family:var(--fm);font-size:20px;font-weight:500;color:{clr}">{kpi["value"]}</div>'
+                    f'<div style="font-family:var(--fm);font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin-top:4px">{kpi["label"]}</div>'
+                    f'<div style="font-family:var(--fm);font-size:9px;color:var(--t3);margin-top:2px">avg {kpi["avg"]}</div>'
                     f'{delta_html}'
                     f'</div>'
                 )
-            st.markdown(kpi_html + '</div>', unsafe_allow_html=True)
+            kpi_html += '</div>'
+            st.markdown(kpi_html, unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)  # close pbi-wrap header portion
 
@@ -2011,14 +1799,15 @@ if st.session_state.get("show_autodash"):
         if st.button("📥 Export Full Dashboard PDF", key="dash_pdf_btn", type="primary", use_container_width=True):
             with st.spinner("Building dashboard PDF — embedding all charts…"):
                 try:
-                    # Get cached story if available
-                    story_txt = ""
-                    for v in st.session_state.get("story_cache", {}).values():
-                        story_txt = v; break
+                    story_txt = next(iter(st.session_state.get("story_cache", {}).values()), "")
+                    dash_by_name = {dn: make_powerbi_dashboard(dd, dn)
+                                    for dn, dd in st.session_state.dataframes.items()}
                     dpdf = make_dashboard_pdf(
-                        st.session_state.dataframes,
-                        st.session_state.chat_history,
-                        story_txt)
+                        datasets_dict          = dict(st.session_state.dataframes),
+                        dashboard_data_by_name = dash_by_name,
+                        story_text             = story_txt,
+                        history                = st.session_state.chat_history,
+                    )
                     fname = f"nlda_dashboard_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
                     st.download_button(
                         "⬇ Download Dashboard PDF", dpdf,
@@ -2902,5 +2691,3 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
 
     doc.build(elems)
     return buf.getvalue()
-
-
