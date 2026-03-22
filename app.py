@@ -518,6 +518,33 @@ def generate_demo_datasets():
     mkt["ctr_pct"]=(mkt["clicks"]/mkt["impressions"]*100).round(2)
     return {"sales_data":sales,"marketing_data":mkt}
 
+# ─────────────────────────────────────────────────────────────────────
+#  CHART CONSTANTS  — must be defined before make_chart
+# ─────────────────────────────────────────────────────────────────────
+NEEDS_NUMERIC_Y = {
+    "bar","grouped_bar","stacked_bar","horizontal_bar","line","multi_line",
+    "area","stacked_area","scatter","bubble","box","violin","strip",
+    "funnel","waterfall","gauge","density_heatmap"
+}
+
+# 20-color high-contrast palette for distinct series
+COLORS = [
+    "#f0c040","#22d3ee","#a78bfa","#34d399","#fb7185","#fbbf24",
+    "#38bdf8","#f472b6","#4ade80","#818cf8","#fdba74","#67e8f9",
+    "#c084fc","#86efac","#fca5a5","#fde68a","#7dd3fc","#f9a8d4",
+    "#6ee7b7","#a5b4fc"
+]
+
+# Dashboard palette (slightly different order for variety)
+DASH_COLORS = [
+    "#f0c040","#22d3ee","#a78bfa","#34d399","#fb7185",
+    "#fbbf24","#38bdf8","#f472b6","#4ade80","#818cf8",
+    "#fdba74","#67e8f9","#c084fc","#86efac","#fca5a5"
+]
+
+# ─────────────────────────────────────────────────────────────────────
+#  CHART FACTORY  — 25+ types, smart column validation, rich colors
+# ─────────────────────────────────────────────────────────────────────
 def make_chart(df, chart_type, cfg):
     if df is None or df.empty: return None
     if not chart_type or chart_type.lower().strip() in ("none",""): return None
@@ -528,12 +555,6 @@ def make_chart(df, chart_type, cfg):
     if ct in NEEDS_NUMERIC_Y:
         if y is None or not pd.api.types.is_numeric_dtype(df[y]): y=_best_y(df,y)
         if x is None: x=_best_x(df,x)
-
-    # Rich distinct color palette — 20 colors for maximum differentiation
-    COLORS = ["#f0c040","#22d3ee","#a78bfa","#34d399","#fb7185","#fbbf24",
-              "#38bdf8","#f472b6","#4ade80","#818cf8","#fdba74","#67e8f9",
-              "#c084fc","#86efac","#fca5a5","#fde68a","#7dd3fc","#f9a8d4",
-              "#6ee7b7","#a5b4fc"]
 
     try:
         kw=dict(title=title); fig=None
@@ -719,10 +740,6 @@ def make_chart(df, chart_type, cfg):
 # ─────────────────────────────────────────────────────────────────────
 #  POWER BI STYLE DASHBOARD
 # ─────────────────────────────────────────────────────────────────────
-
-DASH_COLORS = ["#f0c040","#22d3ee","#a78bfa","#34d399","#fb7185",
-               "#fbbf24","#38bdf8","#f472b6","#4ade80","#818cf8",
-               "#fdba74","#67e8f9","#c084fc","#86efac","#fca5a5"]
 
 def make_powerbi_dashboard(df, dataset_name):
     nc  = smart_numeric_cols(df)
@@ -1201,6 +1218,239 @@ def make_pdf(history):
 
 
 
+
+# ─────────────────────────────────────────────────────────────────────
+#  FULL DASHBOARD PDF EXPORT
+# ─────────────────────────────────────────────────────────────────────
+def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", history=None):
+    """Complete PDF: cover + dataset stats + ALL dashboard charts + story + query analyses."""
+    history = history or []
+    try: import reportlab
+    except ImportError: raise RuntimeError("Install reportlab: pip install reportlab")
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors as rc
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                    HRFlowable, KeepTogether, Table, TableStyle,
+                                    PageBreak, Image as RLImage)
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+    try: import kaleido; HAS_K=True
+    except ImportError: HAS_K=False
+
+    buf=io.BytesIO()
+    doc=SimpleDocTemplate(buf,pagesize=A4,leftMargin=1.8*cm,rightMargin=1.8*cm,
+                          topMargin=2*cm,bottomMargin=2*cm,
+                          title="NLDA Pro Full Intelligence Report")
+    sty=getSampleStyleSheet()
+
+    GOLD=rc.HexColor("#996600"); VIOLET=rc.HexColor("#5b21b6"); BLUE=rc.HexColor("#1e40af")
+    GREEN=rc.HexColor("#166534"); RED=rc.HexColor("#991b1b"); GRAY=rc.HexColor("#374151")
+    LTGRAY=rc.HexColor("#f3f4f6"); MDGRAY=rc.HexColor("#d1d5db"); DKGRAY=rc.HexColor("#6b7280")
+    WHITE=rc.white; TEAL=rc.HexColor("#0d9488"); AMBER=rc.HexColor("#b45309")
+
+    def S(n,**kw): return ParagraphStyle(n,parent=sty["Normal"],**kw)
+    def P(t,s):    return Paragraph(_st(str(t)),s)
+    def HR(th=0.8,cl=MDGRAY,sp=8): return HRFlowable(width="100%",thickness=th,color=cl,spaceAfter=sp)
+
+    h2_s  =S("h2", fontSize=14,textColor=BLUE,  fontName="Helvetica-Bold",spaceAfter=6, spaceBefore=16)
+    h3_s  =S("h3", fontSize=11,textColor=VIOLET, fontName="Helvetica-Bold",spaceAfter=4, spaceBefore=10)
+    h4_s  =S("h4", fontSize=10,textColor=TEAL,   fontName="Helvetica-Bold",spaceAfter=3, spaceBefore=6)
+    sub_s =S("sub",fontSize=11,textColor=DKGRAY, spaceAfter=5)
+    body_s=S("body",fontSize=10,textColor=GRAY,  leading=15,spaceAfter=4)
+    bul_s =S("bul",fontSize=10,textColor=GRAY,   leading=14,spaceAfter=3,leftIndent=14,firstLineIndent=-8)
+    anom_s=S("an", fontSize=10,textColor=RED,    leading=14,spaceAfter=3,leftIndent=14,firstLineIndent=-8)
+    mono_s=S("mon",fontSize=8, textColor=DKGRAY, fontName="Courier",leading=12,spaceAfter=2,leftIndent=8)
+    story_s=S("st",fontSize=11,textColor=GRAY,   leading=18,spaceAfter=12)
+    note_s=S("nt", fontSize=9, textColor=DKGRAY, fontName="Helvetica-Oblique",spaceAfter=4)
+    chap_s=S("cp", fontSize=10,textColor=VIOLET, fontName="Helvetica-Bold",spaceAfter=4,spaceBefore=10)
+    conf_map={"high":S("ch",fontSize=9,textColor=GREEN,fontName="Helvetica-Bold",spaceAfter=3),
+              "medium":S("cm",fontSize=9,textColor=AMBER,fontName="Helvetica-Bold",spaceAfter=3),
+              "low":   S("cl",fontSize=9,textColor=RED,  fontName="Helvetica-Bold",spaceAfter=3)}
+
+    def img_from_fig(fig,w=15*cm,h=7.5*cm):
+        if not HAS_K or fig is None: return []
+        try:
+            img_bytes=fig.to_image(format="png",width=1100,height=550,scale=1.5)
+            return [RLImage(io.BytesIO(img_bytes),width=w,height=h),Spacer(1,0.2*cm)]
+        except Exception: return []
+
+    def kpi_row(kpis):
+        if not kpis: return []
+        cols=min(3,len(kpis))
+        all_rows=[]
+        for row_kpis in [kpis[i:i+cols] for i in range(0,len(kpis),cols)]:
+            row_cells=[]
+            for k in row_kpis:
+                cell=f"{k['icon']} {k['label']}\n{k['value']}"
+                if k.get("delta"): cell+=f"\n{k['delta']}"
+                row_cells.append(P(cell,S(f"kc",fontSize=10,textColor=BLUE,fontName="Helvetica-Bold",leading=14)))
+            while len(row_cells)<cols: row_cells.append(Paragraph("",sty["Normal"]))
+            all_rows.append(row_cells)
+        t=Table(all_rows,colWidths=[16.4*cm/cols]*cols)
+        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),LTGRAY),("GRID",(0,0),(-1,-1),0.4,MDGRAY),
+            ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
+            ("LEFTPADDING",(0,0),(-1,-1),10),("RIGHTPADDING",(0,0),(-1,-1),10),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+        return [t,Spacer(1,0.3*cm)]
+
+    def stat_table(df):
+        nc2=smart_numeric_cols(df)
+        if not nc2: return []
+        data=[["Column","Total","Mean","Min","Max","Std"]]
+        for col in nc2[:8]:
+            s=df[col].dropna()
+            data.append([_st(col.replace("_"," ").title()),_st(fmt(float(s.sum()))),
+                         _st(fmt(float(s.mean()))),_st(fmt(float(s.min()))),
+                         _st(fmt(float(s.max()))),_st(fmt(float(s.std())))])
+        cw=[5*cm,2.2*cm,2.2*cm,2.2*cm,2.2*cm,2.2*cm]
+        t=Table(data,colWidths=cw,repeatRows=1)
+        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),VIOLET),("TEXTCOLOR",(0,0),(-1,0),WHITE),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),8),
+            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY]),
+            ("GRID",(0,0),(-1,-1),0.3,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,VIOLET),
+            ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("LEFTPADDING",(0,0),(-1,-1),6),("RIGHTPADDING",(0,0),(-1,-1),6),
+            ("ALIGN",(1,0),(-1,-1),"CENTER")]))
+        return [t,Spacer(1,0.3*cm)]
+
+    elems=[]
+
+    # ── COVER ──────────────────────────────────────────────────────────
+    elems.append(Spacer(1,2.5*cm))
+    def colored_bar(text,font_size,bg_color,font_color=WHITE,font_name="Helvetica-Bold"):
+        d=[[P(text,S(f"b{font_size}",fontSize=font_size,textColor=font_color,
+                     fontName=font_name,leading=font_size+6))]]
+        t=Table(d,colWidths=[16.4*cm])
+        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),bg_color),
+            ("LEFTPADDING",(0,0),(-1,-1),18),("TOPPADDING",(0,0),(-1,-1),14),
+            ("BOTTOMPADDING",(0,0),(-1,-1),14),("RIGHTPADDING",(0,0),(-1,-1),18)]))
+        return t
+    elems.append(colored_bar("NLDA Pro",38,GOLD))
+    elems.append(Spacer(1,0.3*cm))
+    elems.append(colored_bar("Full Intelligence Report — Dashboard & Analysis",15,VIOLET))
+    elems.append(Spacer(1,1.2*cm))
+    elems.append(HR(1.0,GOLD,10))
+    elems.append(Spacer(1,0.4*cm))
+    elems.append(P(f"Generated: {datetime.now().strftime('%A, %d %B %Y at %H:%M')}",sub_s))
+    elems.append(P(f"Datasets: {', '.join(datasets_dict.keys())}",sub_s))
+    total_dash_charts=sum(len(d.get("charts",[])) for d in dashboard_data_by_name.values())
+    elems.append(P(f"Dashboard charts: {total_dash_charts}  |  Query analyses: {len(history)}",sub_s))
+    if not HAS_K:
+        elems.append(P("Tip: pip install kaleido to embed chart images in this PDF.",note_s))
+    elems.append(Spacer(1,0.5*cm)); elems.append(HR(0.5,MDGRAY,16))
+
+    cov_data=[["Metric","Value"],
+              ["Total dataset rows",f"{sum(len(d) for d in datasets_dict.values()):,}"],
+              ["Dashboard charts",str(total_dash_charts)],
+              ["Query analyses",str(len(history))],
+              ["KPIs extracted",str(sum(len(e.get("kpis",[])) for e in history))],
+              ["Insights generated",str(sum(len(e.get("insights",[])) for e in history))]]
+    ct=Table(cov_data,colWidths=[9*cm,7*cm])
+    ct.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),BLUE),("TEXTCOLOR",(0,0),(-1,0),WHITE),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),10),
+        ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY]),("GRID",(0,0),(-1,-1),0.4,MDGRAY),
+        ("LINEBELOW",(0,0),(-1,0),1,BLUE),("TOPPADDING",(0,0),(-1,-1),6),
+        ("BOTTOMPADDING",(0,0),(-1,-1),6),("LEFTPADDING",(0,0),(-1,-1),10)]))
+    elems.append(ct)
+    elems.append(PageBreak())
+
+    # ── PART I: DASHBOARD ─────────────────────────────────────────────
+    elems.append(P("Part I — Auto-Dashboard",h2_s)); elems.append(HR(1.0,GOLD,12))
+    for dn,dd in datasets_dict.items():
+        dash=dashboard_data_by_name.get(dn,{}); kpis=dash.get("kpis",[]); dcharts=dash.get("charts",[])
+        nc2=smart_numeric_cols(dd); cc2=smart_cat_cols(dd)
+        elems.append(P(f"Dataset: {dn.replace('_',' ').title()}",h2_s))
+        elems.append(P(f"{len(dd):,} rows · {len(dd.columns)} cols · {len(nc2)} numeric · {len(cc2)} categorical",sub_s))
+        elems.append(HR(0.5,rc.HexColor("#bfdbfe"),6))
+        elems.append(P("Numeric Statistics",h3_s)); elems.extend(stat_table(dd))
+        if kpis: elems.append(P("Key Performance Indicators",h3_s)); elems.extend(kpi_row(kpis))
+        if dcharts:
+            elems.append(P(f"Dashboard Charts ({len(dcharts)} total)",h3_s))
+            if not HAS_K: elems.append(P("[Install kaleido: pip install kaleido]",note_s))
+            for ci,(label,fig) in enumerate(dcharts):
+                elems.append(P(f"{ci+1}. {label}",chap_s))
+                imgs=img_from_fig(fig,w=15*cm,h=7*cm)
+                elems.extend(imgs if imgs else [P("[Chart not embedded — install kaleido]",note_s)])
+                elems.append(Spacer(1,0.3*cm))
+        elems.append(PageBreak())
+
+    # ── PART II: DATA STORY ───────────────────────────────────────────
+    if story_text and story_text.strip():
+        elems.append(P("Part II — AI Data Story",h2_s)); elems.append(HR(1.0,GOLD,12))
+        section_titles=["The Headline Discovery","The Pattern in the Data",
+                         "Who Is Winning","The Hidden Risk","The Root Cause","Monday Morning Actions"]
+        for i,para in enumerate([p.strip() for p in story_text.split("\n\n") if p.strip()]):
+            sec=section_titles[i] if i<len(section_titles) else f"Section {i+1}"
+            elems.append(P(sec,h3_s)); elems.append(P(para,story_s))
+        elems.append(PageBreak())
+
+    # ── PART III: QUERY ANALYSES ──────────────────────────────────────
+    if history:
+        elems.append(P("Part III — Query Analysis History",h2_s)); elems.append(HR(1.0,GOLD,12))
+        for i,e in enumerate(history,1):
+            items=[]
+            items.append(P(f"Analysis {i} · {e.get('ts','')}",h3_s))
+            items.append(HR(0.4,rc.HexColor("#bfdbfe"),4))
+            qd=[[P(f"Q: {e.get('question','')}",S("q",fontSize=11,textColor=BLUE,
+                                                    fontName="Helvetica-BoldOblique",leading=15))]]
+            qt=Table(qd,colWidths=[14.4*cm])
+            qt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),rc.HexColor("#eff6ff")),
+                ("LEFTPADDING",(0,0),(-1,-1),12),("TOPPADDING",(0,0),(-1,-1),8),
+                ("BOTTOMPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),12),
+                ("BOX",(0,0),(-1,-1),1,rc.HexColor("#93c5fd"))]))
+            items.append(qt); items.append(Spacer(1,0.2*cm))
+            items.append(P("Summary",h4_s)); items.append(P(e.get("summary",""),body_s))
+            conf=e.get("confidence","high").lower()
+            items.append(P(f"Confidence: {conf.upper()}",conf_map.get(conf,conf_map["high"])))
+            if e.get("kpis"):
+                items.append(P("Key Metrics",h4_s))
+                kd=[["Metric","Value","Change"]]
+                for k in e["kpis"]: kd.append([_st(k.get("label","")),_st(k.get("value","")),_st(k.get("delta","—") or "—")])
+                kt=Table(kd,colWidths=[7*cm,3.5*cm,3.5*cm],repeatRows=1)
+                kt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),VIOLET),("TEXTCOLOR",(0,0),(-1,0),WHITE),
+                    ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),8),
+                    ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
+                    ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
+                    ("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),7),
+                    ("GRID",(0,0),(-1,-1),0.3,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,VIOLET),
+                    ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY])]))
+                items.extend([Spacer(1,0.1*cm),kt,Spacer(1,0.2*cm)])
+            if e.get("fig"):
+                items.append(P("Chart",h4_s))
+                imgs=img_from_fig(e["fig"],w=14*cm,h=6.5*cm)
+                items.extend(imgs if imgs else [P("[kaleido required]",note_s)])
+            if e.get("query_story","").strip():
+                items.append(P("Plain-English Explanation",h4_s))
+                for para in e["query_story"].split("\n\n"):
+                    if para.strip(): items.append(P(para,story_s))
+            if e.get("insights"):
+                items.append(P("Key Insights",h4_s))
+                for ins in e["insights"]: items.append(P(f"* {ins}",bul_s))
+            if e.get("anomalies"):
+                items.append(P("Anomalies",h4_s))
+                for an in e["anomalies"]: items.append(P(f"[!] {an}",anom_s))
+            if e.get("sql_query","").strip():
+                items.append(P("SQL",h4_s))
+                for line in e["sql_query"].split("\n"): items.append(P(line or " ",mono_s))
+            items.append(Spacer(1,0.3*cm)); items.append(HR(0.6,MDGRAY,8))
+            elems.extend(items)
+
+    # ── BACK COVER ────────────────────────────────────────────────────
+    elems.append(PageBreak()); elems.append(Spacer(1,4*cm))
+    elems.append(P("NLDA Pro · Elite Data Intelligence",
+                   S("fp",fontSize=16,textColor=GOLD,fontName="Helvetica-Bold",spaceAfter=8,alignment=TA_CENTER)))
+    elems.append(P(f"Report generated {datetime.now().strftime('%d %B %Y at %H:%M')}",
+                   S("fd",fontSize=10,textColor=DKGRAY,spaceAfter=4,alignment=TA_CENTER)))
+    elems.append(HR(0.5,GOLD,10))
+    elems.append(P("Powered by AI · Built with NLDA Pro v5.1",
+                   S("fdt",fontSize=9,textColor=DKGRAY,spaceAfter=2,alignment=TA_CENTER)))
+
+    doc.build(elems)
+    return buf.getvalue()
 # ─────────────────────────────────────────────────────────────────────
 #  HTTP LAYER
 # ─────────────────────────────────────────────────────────────────────
@@ -2459,235 +2709,3 @@ if run and query.strip():
     st.rerun()
 
 
-# ─────────────────────────────────────────────────────────────────────
-#  FULL DASHBOARD PDF EXPORT
-# ─────────────────────────────────────────────────────────────────────
-def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", history=None):
-    """Complete PDF: cover + dataset stats + ALL dashboard charts + story + query analyses."""
-    history = history or []
-    try: import reportlab
-    except ImportError: raise RuntimeError("Install reportlab: pip install reportlab")
-
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib import colors as rc
-    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                    HRFlowable, KeepTogether, Table, TableStyle,
-                                    PageBreak, Image as RLImage)
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
-
-    try: import kaleido; HAS_K=True
-    except ImportError: HAS_K=False
-
-    buf=io.BytesIO()
-    doc=SimpleDocTemplate(buf,pagesize=A4,leftMargin=1.8*cm,rightMargin=1.8*cm,
-                          topMargin=2*cm,bottomMargin=2*cm,
-                          title="NLDA Pro Full Intelligence Report")
-    sty=getSampleStyleSheet()
-
-    GOLD=rc.HexColor("#996600"); VIOLET=rc.HexColor("#5b21b6"); BLUE=rc.HexColor("#1e40af")
-    GREEN=rc.HexColor("#166534"); RED=rc.HexColor("#991b1b"); GRAY=rc.HexColor("#374151")
-    LTGRAY=rc.HexColor("#f3f4f6"); MDGRAY=rc.HexColor("#d1d5db"); DKGRAY=rc.HexColor("#6b7280")
-    WHITE=rc.white; TEAL=rc.HexColor("#0d9488"); AMBER=rc.HexColor("#b45309")
-
-    def S(n,**kw): return ParagraphStyle(n,parent=sty["Normal"],**kw)
-    def P(t,s):    return Paragraph(_st(str(t)),s)
-    def HR(th=0.8,cl=MDGRAY,sp=8): return HRFlowable(width="100%",thickness=th,color=cl,spaceAfter=sp)
-
-    h2_s  =S("h2", fontSize=14,textColor=BLUE,  fontName="Helvetica-Bold",spaceAfter=6, spaceBefore=16)
-    h3_s  =S("h3", fontSize=11,textColor=VIOLET, fontName="Helvetica-Bold",spaceAfter=4, spaceBefore=10)
-    h4_s  =S("h4", fontSize=10,textColor=TEAL,   fontName="Helvetica-Bold",spaceAfter=3, spaceBefore=6)
-    sub_s =S("sub",fontSize=11,textColor=DKGRAY, spaceAfter=5)
-    body_s=S("body",fontSize=10,textColor=GRAY,  leading=15,spaceAfter=4)
-    bul_s =S("bul",fontSize=10,textColor=GRAY,   leading=14,spaceAfter=3,leftIndent=14,firstLineIndent=-8)
-    anom_s=S("an", fontSize=10,textColor=RED,    leading=14,spaceAfter=3,leftIndent=14,firstLineIndent=-8)
-    mono_s=S("mon",fontSize=8, textColor=DKGRAY, fontName="Courier",leading=12,spaceAfter=2,leftIndent=8)
-    story_s=S("st",fontSize=11,textColor=GRAY,   leading=18,spaceAfter=12)
-    note_s=S("nt", fontSize=9, textColor=DKGRAY, fontName="Helvetica-Oblique",spaceAfter=4)
-    chap_s=S("cp", fontSize=10,textColor=VIOLET, fontName="Helvetica-Bold",spaceAfter=4,spaceBefore=10)
-    conf_map={"high":S("ch",fontSize=9,textColor=GREEN,fontName="Helvetica-Bold",spaceAfter=3),
-              "medium":S("cm",fontSize=9,textColor=AMBER,fontName="Helvetica-Bold",spaceAfter=3),
-              "low":   S("cl",fontSize=9,textColor=RED,  fontName="Helvetica-Bold",spaceAfter=3)}
-
-    def img_from_fig(fig,w=15*cm,h=7.5*cm):
-        if not HAS_K or fig is None: return []
-        try:
-            img_bytes=fig.to_image(format="png",width=1100,height=550,scale=1.5)
-            return [RLImage(io.BytesIO(img_bytes),width=w,height=h),Spacer(1,0.2*cm)]
-        except Exception: return []
-
-    def kpi_row(kpis):
-        if not kpis: return []
-        cols=min(3,len(kpis))
-        all_rows=[]
-        for row_kpis in [kpis[i:i+cols] for i in range(0,len(kpis),cols)]:
-            row_cells=[]
-            for k in row_kpis:
-                cell=f"{k['icon']} {k['label']}\n{k['value']}"
-                if k.get("delta"): cell+=f"\n{k['delta']}"
-                row_cells.append(P(cell,S(f"kc",fontSize=10,textColor=BLUE,fontName="Helvetica-Bold",leading=14)))
-            while len(row_cells)<cols: row_cells.append(Paragraph("",sty["Normal"]))
-            all_rows.append(row_cells)
-        t=Table(all_rows,colWidths=[16.4*cm/cols]*cols)
-        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),LTGRAY),("GRID",(0,0),(-1,-1),0.4,MDGRAY),
-            ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
-            ("LEFTPADDING",(0,0),(-1,-1),10),("RIGHTPADDING",(0,0),(-1,-1),10),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
-        return [t,Spacer(1,0.3*cm)]
-
-    def stat_table(df):
-        nc2=smart_numeric_cols(df)
-        if not nc2: return []
-        data=[["Column","Total","Mean","Min","Max","Std"]]
-        for col in nc2[:8]:
-            s=df[col].dropna()
-            data.append([_st(col.replace("_"," ").title()),_st(fmt(float(s.sum()))),
-                         _st(fmt(float(s.mean()))),_st(fmt(float(s.min()))),
-                         _st(fmt(float(s.max()))),_st(fmt(float(s.std())))])
-        cw=[5*cm,2.2*cm,2.2*cm,2.2*cm,2.2*cm,2.2*cm]
-        t=Table(data,colWidths=cw,repeatRows=1)
-        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),VIOLET),("TEXTCOLOR",(0,0),(-1,0),WHITE),
-            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),8),
-            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY]),
-            ("GRID",(0,0),(-1,-1),0.3,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,VIOLET),
-            ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
-            ("LEFTPADDING",(0,0),(-1,-1),6),("RIGHTPADDING",(0,0),(-1,-1),6),
-            ("ALIGN",(1,0),(-1,-1),"CENTER")]))
-        return [t,Spacer(1,0.3*cm)]
-
-    elems=[]
-
-    # ── COVER ──────────────────────────────────────────────────────────
-    elems.append(Spacer(1,2.5*cm))
-    def colored_bar(text,font_size,bg_color,font_color=WHITE,font_name="Helvetica-Bold"):
-        d=[[P(text,S(f"b{font_size}",fontSize=font_size,textColor=font_color,
-                     fontName=font_name,leading=font_size+6))]]
-        t=Table(d,colWidths=[16.4*cm])
-        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),bg_color),
-            ("LEFTPADDING",(0,0),(-1,-1),18),("TOPPADDING",(0,0),(-1,-1),14),
-            ("BOTTOMPADDING",(0,0),(-1,-1),14),("RIGHTPADDING",(0,0),(-1,-1),18)]))
-        return t
-    elems.append(colored_bar("NLDA Pro",38,GOLD))
-    elems.append(Spacer(1,0.3*cm))
-    elems.append(colored_bar("Full Intelligence Report — Dashboard & Analysis",15,VIOLET))
-    elems.append(Spacer(1,1.2*cm))
-    elems.append(HR(1.0,GOLD,10))
-    elems.append(Spacer(1,0.4*cm))
-    elems.append(P(f"Generated: {datetime.now().strftime('%A, %d %B %Y at %H:%M')}",sub_s))
-    elems.append(P(f"Datasets: {', '.join(datasets_dict.keys())}",sub_s))
-    total_dash_charts=sum(len(d.get("charts",[])) for d in dashboard_data_by_name.values())
-    elems.append(P(f"Dashboard charts: {total_dash_charts}  |  Query analyses: {len(history)}",sub_s))
-    if not HAS_K:
-        elems.append(P("Tip: pip install kaleido to embed chart images in this PDF.",note_s))
-    elems.append(Spacer(1,0.5*cm)); elems.append(HR(0.5,MDGRAY,16))
-
-    cov_data=[["Metric","Value"],
-              ["Total dataset rows",f"{sum(len(d) for d in datasets_dict.values()):,}"],
-              ["Dashboard charts",str(total_dash_charts)],
-              ["Query analyses",str(len(history))],
-              ["KPIs extracted",str(sum(len(e.get("kpis",[])) for e in history))],
-              ["Insights generated",str(sum(len(e.get("insights",[])) for e in history))]]
-    ct=Table(cov_data,colWidths=[9*cm,7*cm])
-    ct.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),BLUE),("TEXTCOLOR",(0,0),(-1,0),WHITE),
-        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),10),
-        ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY]),("GRID",(0,0),(-1,-1),0.4,MDGRAY),
-        ("LINEBELOW",(0,0),(-1,0),1,BLUE),("TOPPADDING",(0,0),(-1,-1),6),
-        ("BOTTOMPADDING",(0,0),(-1,-1),6),("LEFTPADDING",(0,0),(-1,-1),10)]))
-    elems.append(ct)
-    elems.append(PageBreak())
-
-    # ── PART I: DASHBOARD ─────────────────────────────────────────────
-    elems.append(P("Part I — Auto-Dashboard",h2_s)); elems.append(HR(1.0,GOLD,12))
-    for dn,dd in datasets_dict.items():
-        dash=dashboard_data_by_name.get(dn,{}); kpis=dash.get("kpis",[]); dcharts=dash.get("charts",[])
-        nc2=smart_numeric_cols(dd); cc2=smart_cat_cols(dd)
-        elems.append(P(f"Dataset: {dn.replace('_',' ').title()}",h2_s))
-        elems.append(P(f"{len(dd):,} rows · {len(dd.columns)} cols · {len(nc2)} numeric · {len(cc2)} categorical",sub_s))
-        elems.append(HR(0.5,rc.HexColor("#bfdbfe"),6))
-        elems.append(P("Numeric Statistics",h3_s)); elems.extend(stat_table(dd))
-        if kpis: elems.append(P("Key Performance Indicators",h3_s)); elems.extend(kpi_row(kpis))
-        if dcharts:
-            elems.append(P(f"Dashboard Charts ({len(dcharts)} total)",h3_s))
-            if not HAS_K: elems.append(P("[Install kaleido: pip install kaleido]",note_s))
-            for ci,(label,fig) in enumerate(dcharts):
-                elems.append(P(f"{ci+1}. {label}",chap_s))
-                imgs=img_from_fig(fig,w=15*cm,h=7*cm)
-                elems.extend(imgs if imgs else [P("[Chart not embedded — install kaleido]",note_s)])
-                elems.append(Spacer(1,0.3*cm))
-        elems.append(PageBreak())
-
-    # ── PART II: DATA STORY ───────────────────────────────────────────
-    if story_text and story_text.strip():
-        elems.append(P("Part II — AI Data Story",h2_s)); elems.append(HR(1.0,GOLD,12))
-        section_titles=["The Headline Discovery","The Pattern in the Data",
-                         "Who Is Winning","The Hidden Risk","The Root Cause","Monday Morning Actions"]
-        for i,para in enumerate([p.strip() for p in story_text.split("\n\n") if p.strip()]):
-            sec=section_titles[i] if i<len(section_titles) else f"Section {i+1}"
-            elems.append(P(sec,h3_s)); elems.append(P(para,story_s))
-        elems.append(PageBreak())
-
-    # ── PART III: QUERY ANALYSES ──────────────────────────────────────
-    if history:
-        elems.append(P("Part III — Query Analysis History",h2_s)); elems.append(HR(1.0,GOLD,12))
-        for i,e in enumerate(history,1):
-            items=[]
-            items.append(P(f"Analysis {i} · {e.get('ts','')}",h3_s))
-            items.append(HR(0.4,rc.HexColor("#bfdbfe"),4))
-            qd=[[P(f"Q: {e.get('question','')}",S("q",fontSize=11,textColor=BLUE,
-                                                    fontName="Helvetica-BoldOblique",leading=15))]]
-            qt=Table(qd,colWidths=[14.4*cm])
-            qt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),rc.HexColor("#eff6ff")),
-                ("LEFTPADDING",(0,0),(-1,-1),12),("TOPPADDING",(0,0),(-1,-1),8),
-                ("BOTTOMPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),12),
-                ("BOX",(0,0),(-1,-1),1,rc.HexColor("#93c5fd"))]))
-            items.append(qt); items.append(Spacer(1,0.2*cm))
-            items.append(P("Summary",h4_s)); items.append(P(e.get("summary",""),body_s))
-            conf=e.get("confidence","high").lower()
-            items.append(P(f"Confidence: {conf.upper()}",conf_map.get(conf,conf_map["high"])))
-            if e.get("kpis"):
-                items.append(P("Key Metrics",h4_s))
-                kd=[["Metric","Value","Change"]]
-                for k in e["kpis"]: kd.append([_st(k.get("label","")),_st(k.get("value","")),_st(k.get("delta","—") or "—")])
-                kt=Table(kd,colWidths=[7*cm,3.5*cm,3.5*cm],repeatRows=1)
-                kt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),VIOLET),("TEXTCOLOR",(0,0),(-1,0),WHITE),
-                    ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),8),
-                    ("FONTNAME",(0,1),(-1,-1),"Helvetica"),("TEXTCOLOR",(0,1),(-1,-1),GRAY),
-                    ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4),
-                    ("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),7),
-                    ("GRID",(0,0),(-1,-1),0.3,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,VIOLET),
-                    ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY])]))
-                items.extend([Spacer(1,0.1*cm),kt,Spacer(1,0.2*cm)])
-            if e.get("fig"):
-                items.append(P("Chart",h4_s))
-                imgs=img_from_fig(e["fig"],w=14*cm,h=6.5*cm)
-                items.extend(imgs if imgs else [P("[kaleido required]",note_s)])
-            if e.get("query_story","").strip():
-                items.append(P("Plain-English Explanation",h4_s))
-                for para in e["query_story"].split("\n\n"):
-                    if para.strip(): items.append(P(para,story_s))
-            if e.get("insights"):
-                items.append(P("Key Insights",h4_s))
-                for ins in e["insights"]: items.append(P(f"* {ins}",bul_s))
-            if e.get("anomalies"):
-                items.append(P("Anomalies",h4_s))
-                for an in e["anomalies"]: items.append(P(f"[!] {an}",anom_s))
-            if e.get("sql_query","").strip():
-                items.append(P("SQL",h4_s))
-                for line in e["sql_query"].split("\n"): items.append(P(line or " ",mono_s))
-            items.append(Spacer(1,0.3*cm)); items.append(HR(0.6,MDGRAY,8))
-            elems.extend(items)
-
-    # ── BACK COVER ────────────────────────────────────────────────────
-    elems.append(PageBreak()); elems.append(Spacer(1,4*cm))
-    elems.append(P("NLDA Pro · Elite Data Intelligence",
-                   S("fp",fontSize=16,textColor=GOLD,fontName="Helvetica-Bold",spaceAfter=8,alignment=TA_CENTER)))
-    elems.append(P(f"Report generated {datetime.now().strftime('%d %B %Y at %H:%M')}",
-                   S("fd",fontSize=10,textColor=DKGRAY,spaceAfter=4,alignment=TA_CENTER)))
-    elems.append(HR(0.5,GOLD,10))
-    elems.append(P("Powered by AI · Built with NLDA Pro v5.1",
-                   S("fdt",fontSize=9,textColor=DKGRAY,spaceAfter=2,alignment=TA_CENTER)))
-
-    doc.build(elems)
-    return buf.getvalue()
