@@ -1832,6 +1832,41 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
 
     HAS_K = True   # Always True — matplotlib is used, no kaleido needed
 
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=1.8*cm, rightMargin=1.8*cm,
+                            topMargin=2*cm, bottomMargin=2*cm,
+                            title="NLDA Pro Full Intelligence Report")
+    sty = getSampleStyleSheet()
+
+    GOLD   = rc.HexColor("#996600"); VIOLET = rc.HexColor("#5b21b6")
+    BLUE   = rc.HexColor("#1e40af"); GREEN  = rc.HexColor("#166534")
+    RED    = rc.HexColor("#991b1b"); GRAY   = rc.HexColor("#374151")
+    LTGRAY = rc.HexColor("#f3f4f6"); MDGRAY = rc.HexColor("#d1d5db")
+    DKGRAY = rc.HexColor("#6b7280"); WHITE  = rc.white
+    TEAL   = rc.HexColor("#0d9488"); AMBER  = rc.HexColor("#b45309")
+
+    def S(n, **kw): return ParagraphStyle(n, parent=sty["Normal"], **kw)
+    def P(t, s):    return Paragraph(_st(str(t)), s)
+    def HR(th=0.8, cl=MDGRAY, sp=8): return HRFlowable(width="100%", thickness=th, color=cl, spaceAfter=sp)
+
+    h2_s   = S("h2",  fontSize=14, textColor=BLUE,  fontName="Helvetica-Bold", spaceAfter=6,  spaceBefore=16)
+    h3_s   = S("h3",  fontSize=11, textColor=VIOLET, fontName="Helvetica-Bold", spaceAfter=4,  spaceBefore=10)
+    h4_s   = S("h4",  fontSize=10, textColor=TEAL,   fontName="Helvetica-Bold", spaceAfter=3,  spaceBefore=6)
+    sub_s  = S("sub", fontSize=11, textColor=DKGRAY, spaceAfter=5)
+    body_s = S("body",fontSize=10, textColor=GRAY,   leading=15, spaceAfter=4)
+    bul_s  = S("bul", fontSize=10, textColor=GRAY,   leading=14, spaceAfter=3, leftIndent=14, firstLineIndent=-8)
+    anom_s = S("an",  fontSize=10, textColor=RED,    leading=14, spaceAfter=3, leftIndent=14, firstLineIndent=-8)
+    mono_s = S("mon", fontSize=8,  textColor=DKGRAY, fontName="Courier", leading=12, spaceAfter=2, leftIndent=8)
+    story_s= S("st",  fontSize=11, textColor=GRAY,   leading=18, spaceAfter=12)
+    note_s = S("nt",  fontSize=9,  textColor=DKGRAY, fontName="Helvetica-Oblique", spaceAfter=4)
+    chap_s = S("cp",  fontSize=10, textColor=VIOLET, fontName="Helvetica-Bold",    spaceAfter=4, spaceBefore=10)
+    conf_map = {
+        "high":   S("ch", fontSize=9, textColor=GREEN, fontName="Helvetica-Bold", spaceAfter=3),
+        "medium": S("cm", fontSize=9, textColor=AMBER, fontName="Helvetica-Bold", spaceAfter=3),
+        "low":    S("cl", fontSize=9, textColor=RED,   fontName="Helvetica-Bold", spaceAfter=3),
+    }
+
     # Chart image builder using matplotlib — no kaleido required
     def img_from_fig(label, df_src, w=15*cm, h=7.5*cm):
         nc2 = smart_numeric_cols(df_src)
@@ -2653,7 +2688,8 @@ if st.session_state.get("show_autodash"):
         st.markdown(
             '<div style="font-family:var(--fm);font-size:9px;color:var(--t3);padding:10px 0;line-height:1.6">'
             'Includes: all charts, KPIs, dataset stats, AI story, query appendix.<br>'
-            'For chart images: <code>pip install kaleido</code>'
+            'Includes: all charts, KPIs, dataset stats, AI story, query appendix.<br>'
+            'Charts embedded via matplotlib — no extra packages needed.'
             '</div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
