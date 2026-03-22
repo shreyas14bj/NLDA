@@ -399,11 +399,16 @@ def smart_numeric_cols(df):
     return out
 
 def smart_cat_cols(df):
-    out=[]
+    """Return categorical/string columns — handles pandas 1.x object and 2.x StringDtype."""
+    out = []
     for c in df.columns:
-        if df[c].dtype==object or pd.api.types.is_categorical_dtype(df[c]):
-            out.append(c)
-        elif df[c].dtype in ("int32","int64") and df[c].nunique()<=20:
+        dtype = df[c].dtype
+        # pandas 2.x StringDtype, object, category, or low-cardinality int
+        if (dtype == object
+                or hasattr(dtype, 'name') and 'string' in str(dtype.name).lower()
+                or str(dtype) in ('string', 'StringDtype')
+                or pd.api.types.is_categorical_dtype(df[c])
+                or (pd.api.types.is_integer_dtype(df[c]) and df[c].nunique() <= 20)):
             out.append(c)
     return out
 
@@ -1413,53 +1418,115 @@ def _mpl_treemap(df, x, y, title):
 def _build_mpl_chart(label, df, nc, cc, dc):
     """
     Build a matplotlib PNG for a given chart label using dataset columns.
-    Returns PNG bytes or None.
+    Returns PNG bytes or None. Each chart has its own try/except so one
+    failure never blocks the rest.
     """
+    # Coerce string cols to native object so groupby / matplotlib work on pandas 2.x
+    df = df.copy()
+    for c in cc:
+        try: df[c] = df[c].astype(str)
+        except Exception: pass
+
+    t = label
     try:
-        t = label
-        if "Top Performers" in label and cc and nc:
-            return _mpl_bar(df, cc[0], nc[0], t)
-        elif "Trend" in label and dc and nc:
-            td = df.copy()
-            td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
-            td2 = td.groupby("_p")[nc[0]].sum().reset_index()
-            td2.columns = ["Period", nc[0]]
-            return _mpl_line(td2, "Period", nc[0], t)
-        elif "Market Share" in label and cc and nc:
-            g = df.groupby(cc[0])[nc[0]].sum().reset_index()
-            return _mpl_pie(g, cc[0], nc[0], t, donut=True)
-        elif "Scatter" in label and len(nc)>=2:
-            s = df.sample(min(300, len(df)), random_state=42)
-            return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
-        elif "Correlation Matrix" in label and len(nc)>=3:
-            return _mpl_heatmap(df, nc, t)
-        elif "Box" in label and cc and nc:
-            return _mpl_box(df, cc[0], nc[0], t)
-        elif "Stacked" in label and len(cc)>=2 and nc:
-            return _mpl_stacked_bar(df, cc[0], nc[0], cc[1], t)
-        elif "Rankings" in label and cc and nc:
-            return _mpl_bar(df, cc[0], nc[0], t, horizontal=True)
-        elif "Multi-Metric" in label and len(nc)>=2 and cc:
-            return _mpl_grouped_bar(df.groupby(cc[0])[nc[:3]].sum().reset_index(), cc[0], nc[:3], t)
-        elif "Area" in label and dc and nc:
-            td = df.copy()
-            td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
-            return _mpl_area(td, "_p", nc[0], cc[0] if cc else None, t)
-        elif "Violin" in label and cc and nc:
-            return _mpl_box(df, cc[0], nc[0], t)   # box as violin fallback
-        elif "Treemap" in label and cc and nc:
-            return _mpl_treemap(df, cc[0], nc[0], t)
-        elif "Histogram" in label and nc:
-            return _mpl_histogram(df, nc[0], cc[0] if cc else None, t)
-        elif "Bubble" in label and len(nc)>=2:
-            s = df.sample(min(200, len(df)), random_state=42)
-            return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
-        else:
-            # Fallback: bar if possible
+        if "Top Performers" in label:
             if cc and nc:
                 return _mpl_bar(df, cc[0], nc[0], t)
+            elif nc:
+                # numeric-only fallback: histogram
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Trend" in label:
+            if dc and nc:
+                td = df.copy()
+                td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
+                td2 = td.groupby("_p")[nc[0]].sum().reset_index()
+                td2.columns = ["Period", nc[0]]
+                return _mpl_line(td2, "Period", nc[0], t)
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Market Share" in label or "Share" in label or "Donut" in label:
+            if cc and nc:
+                g = df.groupby(cc[0])[nc[0]].sum().reset_index()
+                return _mpl_pie(g, cc[0], nc[0], t, donut=True)
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Scatter" in label or "Correlation Scatter" in label:
+            if len(nc) >= 2:
+                s = df.sample(min(300, len(df)), random_state=42)
+                return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
+            elif nc and cc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+        elif "Correlation Matrix" in label or "Heatmap" in label:
+            if len(nc) >= 2:
+                return _mpl_heatmap(df, nc, t)
+            elif cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+        elif "Box" in label or "Distribution" in label:
+            if cc and nc:
+                return _mpl_box(df, cc[0], nc[0], t)
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Stacked" in label:
+            if len(cc) >= 2 and nc:
+                return _mpl_stacked_bar(df, cc[0], nc[0], cc[1], t)
+            elif cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+        elif "Rankings" in label:
+            if cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t, horizontal=True)
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Multi-Metric" in label:
+            if len(nc) >= 2 and cc:
+                return _mpl_grouped_bar(
+                    df.groupby(cc[0])[nc[:3]].sum().reset_index(),
+                    cc[0], nc[:3], t)
+            elif cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+        elif "Area" in label:
+            if dc and nc:
+                td = df.copy()
+                td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
+                return _mpl_area(td, "_p", nc[0], cc[0] if cc else None, t)
+            elif cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+        elif "Violin" in label:
+            if cc and nc:
+                return _mpl_box(df, cc[0], nc[0], t)  # box as violin fallback
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Treemap" in label:
+            if cc and nc:
+                return _mpl_treemap(df, cc[0], nc[0], t)
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        elif "Histogram" in label:
+            if nc:
+                return _mpl_histogram(df, nc[0], cc[0] if cc else None, t)
+        elif "Bubble" in label:
+            if len(nc) >= 2:
+                s = df.sample(min(200, len(df)), random_state=42)
+                return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
+            elif cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+
+        # ── Universal fallback ────────────────────────────────────────
+        if cc and nc:
+            return _mpl_bar(df, cc[0], nc[0], t)
+        elif len(nc) >= 2:
+            return _mpl_heatmap(df, nc, t)
+        elif nc:
+            return _mpl_histogram(df, nc[0], None, t)
+
     except Exception:
-        pass
+        # Last-resort: simple bar or histogram
+        try:
+            if cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
+            elif nc:
+                return _mpl_histogram(df, nc[0], None, t)
+        except Exception:
+            pass
     return None
 
 def _rl_imports():
