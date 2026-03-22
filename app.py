@@ -1,6 +1,6 @@
 """
 ╔═══════════════════════════════════════════════════════════════════╗
-║  NLDA PRO v5.0 · Elite Data Intelligence Platform                 ║
+║  NLDA PRO  Business Data Intelligence Platform                 ║
 ║  "The Data Storyteller" — Ultimate Edition                        ║
 ╠═══════════════════════════════════════════════════════════════════╣
 ║  FIXED in v5.0:                                                   ║
@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore")
 #  PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="NLDA Pro · Elite Data Intelligence",
+    page_title="NLDA Pro · Business Data Intelligence",
     page_icon="⬡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -761,170 +761,212 @@ def make_powerbi_dashboard(df, dataset_name):
         })
 
     charts = []
-    def _add(label, f):
-        if f: charts.append((label, f))
+    def _add(label, fn):
+        """Try to build a chart; add it only if it succeeds."""
+        try:
+            f = fn()
+            if f is not None:
+                charts.append((label, f))
+        except Exception:
+            pass
 
-    try:
-        # 1 Colored bar
-        if cc and nc:
-            cat,num = cc[0],nc[0]
-            g = df.groupby(cat)[num].sum().reset_index().sort_values(num,ascending=False).head(10)
-            fig = px.bar(g,x=cat,y=num,color=cat,color_discrete_sequence=DASH_COLORS,
-                         title=f"Top {cat.replace('_',' ').title()} by {num.replace('_',' ').title()}",text_auto=".2s")
-            fig.update_traces(marker_line_width=0,opacity=.92,textfont_size=10,textposition="outside",cliponaxis=False)
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,showlegend=False)
-            fig.update_xaxes(showgrid=False,tickfont_size=10)
-            fig.update_yaxes(showgrid=True,gridcolor="#1a2035",tickfont_size=10)
-            _add("Top Performers", fig)
+    # 1 ── Colored vertical bar (top categories)
+    if cc and nc:
+        cat, num = cc[0], nc[0]
+        def _c1():
+            g = df.groupby(cat)[num].sum().reset_index().sort_values(num, ascending=False).head(10)
+            fig = px.bar(g, x=cat, y=num, color=cat,
+                         color_discrete_sequence=DASH_COLORS,
+                         title=f"Top {cat.replace('_',' ').title()} by {num.replace('_',' ').title()}",
+                         text_auto=".2s")
+            fig.update_traces(marker_line_width=0, opacity=.92,
+                              textfont_size=10, textposition="outside", cliponaxis=False)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False)
+            fig.update_xaxes(showgrid=False, tickfont_size=10)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            return fig
+        _add("Top Performers", _c1)
 
-        # 2 Dual-axis trend
-        if dc and nc:
+    # 2 ── Dual-axis trend line
+    if dc and nc:
+        def _c2():
             td = df.copy()
             td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
             td2 = td.groupby("_p")[nc[0]].agg(["sum","mean"]).reset_index()
             td2.columns = ["Period","Total","Average"]
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=td2["Period"],y=td2["Total"],name="Total",
-                line=dict(color="#f0c040",width=3),fill="tozeroy",fillcolor="rgba(240,192,64,.07)",
-                mode="lines+markers",marker=dict(size=6,color="#f0c040")))
-            fig.add_trace(go.Scatter(x=td2["Period"],y=td2["Average"],name="Monthly Avg",
-                line=dict(color="#22d3ee",width=2,dash="dot"),mode="lines"))
-            fig.update_layout(**PLOTLY_THEME,title=f"{nc[0].replace('_',' ').title()} — Trend & Average",
-                title_x=0.,legend=dict(orientation="h",y=1.12,x=0))
-            fig.update_xaxes(showgrid=False,tickfont_size=9,tickangle=-35)
-            fig.update_yaxes(showgrid=True,gridcolor="#1a2035",tickfont_size=10)
-            _add("Trend Over Time", fig)
+            fig.add_trace(go.Scatter(x=td2["Period"], y=td2["Total"], name="Total",
+                line=dict(color="#f0c040", width=3), fill="tozeroy",
+                fillcolor="rgba(240,192,64,.07)", mode="lines+markers",
+                marker=dict(size=6, color="#f0c040")))
+            fig.add_trace(go.Scatter(x=td2["Period"], y=td2["Average"], name="Monthly Avg",
+                line=dict(color="#22d3ee", width=2, dash="dot"), mode="lines"))
+            fig.update_layout(**PLOTLY_THEME,
+                title=f"{nc[0].replace('_',' ').title()} — Trend & Average",
+                title_x=0., legend=dict(orientation="h", y=1.12, x=0))
+            fig.update_xaxes(showgrid=False, tickfont_size=9, tickangle=-35)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            return fig
+        _add("Trend Over Time", _c2)
 
-        # 3 Donut
-        if cc and nc:
+    # 3 ── Donut with center annotation
+    if cc and nc:
+        def _c3():
             g2 = df.groupby(cc[0])[nc[0]].sum().reset_index()
             total = g2[nc[0]].sum()
-            fig = px.pie(g2,names=cc[0],values=nc[0],hole=.52,color_discrete_sequence=DASH_COLORS,
+            fig = px.pie(g2, names=cc[0], values=nc[0], hole=.52,
+                         color_discrete_sequence=DASH_COLORS,
                          title=f"Share of {nc[0].replace('_',' ').title()}")
-            fig.update_traces(textposition="outside",textinfo="percent+label",
-                              marker_line_width=3,marker_line_color="#05060a",pull=[0.04]*len(g2))
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,showlegend=False,
-                annotations=[dict(text=f"<b>{fmt(total)}</b><br>Total",x=0.5,y=0.5,
-                                  font_size=13,font_color="#f0c040",showarrow=False)])
-            _add("Market Share (Donut)", fig)
+            fig.update_traces(textposition="outside", textinfo="percent+label",
+                              marker_line_width=3, marker_line_color="#05060a",
+                              pull=[0.04]*len(g2))
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False,
+                annotations=[dict(text=f"<b>{fmt(total)}</b><br>Total", x=0.5, y=0.5,
+                                  font_size=13, font_color="#f0c040", showarrow=False)])
+            return fig
+        _add("Market Share", _c3)
 
-        # 4 Scatter
-        if len(nc) >= 2:
-            sample = df.sample(min(300,len(df)),random_state=42)
+    # 4 ── Scatter correlation
+    if len(nc) >= 2:
+        def _c4():
+            sample = df.sample(min(300, len(df)), random_state=42)
             col_arg = cc[0] if cc else None
-            fig = px.scatter(sample,x=nc[0],y=nc[1],color=col_arg,
-                             color_discrete_sequence=DASH_COLORS,color_continuous_scale="Plasma",
-                             trendline="ols" if not col_arg else None,opacity=0.72,
+            fig = px.scatter(sample, x=nc[0], y=nc[1], color=col_arg,
+                             color_discrete_sequence=DASH_COLORS,
+                             trendline="ols" if not col_arg else None,
+                             opacity=0.72,
                              title=f"{nc[0].replace('_',' ').title()} vs {nc[1].replace('_',' ').title()}")
-            fig.update_traces(marker=dict(size=7,line_width=0))
-            fig.update_layout(**PLOTLY_THEME,title_x=0.)
-            _add("Correlation (Scatter)", fig)
+            fig.update_traces(marker=dict(size=7, line_width=0))
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            return fig
+        _add("Correlation Scatter", _c4)
 
-        # 5 Heatmap
-        if len(nc) >= 3:
+    # 5 ── Correlation heatmap
+    if len(nc) >= 3:
+        def _c5():
             corr = df[nc[:10]].corr().round(2)
-            fig = px.imshow(corr,color_continuous_scale=["#fb7185","#0e1117","#22d3ee"],
-                            zmin=-1,zmax=1,text_auto=True,title="Metric Correlation Matrix")
-            fig.update_layout(**PLOTLY_THEME,title_x=0.)
-            _add("Correlation Matrix", fig)
+            fig = px.imshow(corr, color_continuous_scale=["#fb7185","#0e1117","#22d3ee"],
+                            zmin=-1, zmax=1, text_auto=True, title="Metric Correlation Matrix")
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            return fig
+        _add("Correlation Matrix", _c5)
 
-        # 6 Box distribution
-        if cc and nc:
-            fig = px.box(df,x=cc[0],y=nc[0],color=cc[0],color_discrete_sequence=DASH_COLORS,notched=True,
+    # 6 ── Box distribution
+    if cc and nc:
+        def _c6():
+            fig = px.box(df, x=cc[0], y=nc[0], color=cc[0],
+                         color_discrete_sequence=DASH_COLORS, notched=True,
                          title=f"Distribution — {nc[0].replace('_',' ').title()} by {cc[0].replace('_',' ').title()}")
-            fig.update_traces(marker_size=3,line_width=1.5)
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,showlegend=False)
-            _add("Distribution (Box)", fig)
+            fig.update_traces(marker_size=3, line_width=1.5)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False)
+            return fig
+        _add("Distribution (Box)", _c6)
 
-        # 7 Stacked bar
-        if len(cc) >= 2 and nc:
-            g3 = df.groupby([cc[0],cc[1]])[nc[0]].sum().reset_index()
-            fig = px.bar(g3,x=cc[0],y=nc[0],color=cc[1],barmode="stack",
+    # 7 ── Stacked bar (2 categories)
+    if len(cc) >= 2 and nc:
+        def _c7():
+            g3 = df.groupby([cc[0], cc[1]])[nc[0]].sum().reset_index()
+            fig = px.bar(g3, x=cc[0], y=nc[0], color=cc[1], barmode="stack",
                          color_discrete_sequence=DASH_COLORS,
                          title=f"{nc[0].replace('_',' ').title()} by {cc[0].replace('_',' ').title()} & {cc[1].replace('_',' ').title()}")
             fig.update_traces(marker_line_width=0)
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,legend=dict(orientation="h",y=1.12))
-            _add("Stacked Breakdown", fig)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., legend=dict(orientation="h", y=1.12))
+            return fig
+        _add("Stacked Breakdown", _c7)
 
-        # 8 Horizontal ranked
-        if cc and nc:
-            cat,num = cc[0],nc[0]
-            g4 = df.groupby(cat)[num].sum().reset_index().sort_values(num,ascending=True).tail(10)
-            fig = px.bar(g4,x=num,y=cat,orientation="h",color=num,
+    # 8 ── Horizontal ranked bar
+    if cc and nc:
+        def _c8():
+            g4 = df.groupby(cc[0])[nc[0]].sum().reset_index().sort_values(nc[0], ascending=True).tail(10)
+            fig = px.bar(g4, x=nc[0], y=cc[0], orientation="h", color=nc[0],
                          color_continuous_scale=["#1a2035","#f0c040"],
-                         title=f"Rankings — {num.replace('_',' ').title()}",text_auto=".2s")
-            fig.update_traces(marker_line_width=0,textfont_size=10)
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,showlegend=False,coloraxis_showscale=False)
-            _add("Rankings (Horizontal)", fig)
+                         title=f"Rankings — {nc[0].replace('_',' ').title()}", text_auto=".2s")
+            fig.update_traces(marker_line_width=0, textfont_size=10)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False, coloraxis_showscale=False)
+            return fig
+        _add("Rankings", _c8)
 
-        # 9 Grouped multi-metric
-        if len(nc) >= 2 and cc:
+    # 9 ── Grouped multi-metric bar
+    if len(nc) >= 2 and cc:
+        def _c9():
             g5 = df.groupby(cc[0])[nc[:3]].sum().reset_index()
-            gm = g5.melt(id_vars=cc[0],var_name="Metric",value_name="Value")
-            fig = px.bar(gm,x=cc[0],y="Value",color="Metric",barmode="group",
+            gm = g5.melt(id_vars=cc[0], var_name="Metric", value_name="Value")
+            fig = px.bar(gm, x=cc[0], y="Value", color="Metric", barmode="group",
                          color_discrete_sequence=DASH_COLORS,
                          title=f"Multi-Metric Comparison by {cc[0].replace('_',' ').title()}")
-            fig.update_traces(marker_line_width=0,opacity=.88)
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,legend=dict(orientation="h",y=1.12))
-            _add("Multi-Metric Comparison", fig)
+            fig.update_traces(marker_line_width=0, opacity=.88)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., legend=dict(orientation="h", y=1.12))
+            return fig
+        _add("Multi-Metric", _c9)
 
-        # 10 Area chart cumulative
-        if dc and nc:
+    # 10 ── Area trend (by category over time)
+    if dc and nc:
+        def _c10():
             td = df.copy()
             td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
             if cc:
-                td3 = td.groupby(["_p",cc[0]])[nc[0]].sum().reset_index()
-                fig = px.area(td3,x="_p",y=nc[0],color=cc[0],color_discrete_sequence=DASH_COLORS,
+                td3 = td.groupby(["_p", cc[0]])[nc[0]].sum().reset_index()
+                fig = px.area(td3, x="_p", y=nc[0], color=cc[0],
+                              color_discrete_sequence=DASH_COLORS,
                               title=f"Cumulative {nc[0].replace('_',' ').title()} by {cc[0].replace('_',' ').title()}")
             else:
                 td3 = td.groupby("_p")[nc[0]].sum().reset_index()
-                fig = px.area(td3,x="_p",y=nc[0],color_discrete_sequence=DASH_COLORS,
+                fig = px.area(td3, x="_p", y=nc[0],
+                              color_discrete_sequence=DASH_COLORS,
                               title=f"Cumulative {nc[0].replace('_',' ').title()}")
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,legend=dict(orientation="h",y=1.12))
-            fig.update_xaxes(showgrid=False,tickfont_size=9,tickangle=-35)
-            fig.update_yaxes(showgrid=True,gridcolor="#1a2035",tickfont_size=10)
-            _add("Area Trend", fig)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., legend=dict(orientation="h", y=1.12))
+            fig.update_xaxes(showgrid=False, tickfont_size=9, tickangle=-35)
+            fig.update_yaxes(showgrid=True, gridcolor="#1a2035", tickfont_size=10)
+            return fig
+        _add("Area Trend", _c10)
 
-        # 11 Violin
-        if cc and nc:
-            fig = px.violin(df,x=cc[0],y=nc[0],color=cc[0],box=True,color_discrete_sequence=DASH_COLORS,
+    # 11 ── Violin distribution
+    if cc and nc:
+        def _c11():
+            fig = px.violin(df, x=cc[0], y=nc[0], color=cc[0], box=True,
+                            color_discrete_sequence=DASH_COLORS,
                             title=f"Shape of {nc[0].replace('_',' ').title()} by {cc[0].replace('_',' ').title()}")
-            fig.update_layout(**PLOTLY_THEME,title_x=0.,showlegend=False)
-            _add("Violin Distribution", fig)
+            fig.update_layout(**PLOTLY_THEME, title_x=0., showlegend=False)
+            return fig
+        _add("Violin Distribution", _c11)
 
-        # 12 Treemap
-        if cc and nc:
-            path = [cc[0],cc[1]] if len(cc)>=2 else [cc[0]]
-            try:
-                fig = px.treemap(df,path=path,values=nc[0],color=nc[0],
-                                 color_continuous_scale=["#1a2035","#f0c040","#fb7185"],
-                                 title=f"Treemap — {nc[0].replace('_',' ').title()} Hierarchy")
-                fig.update_layout(**PLOTLY_THEME,title_x=0.)
-                _add("Treemap Hierarchy", fig)
-            except Exception: pass
+    # 12 ── Treemap hierarchy
+    if cc and nc:
+        def _c12():
+            path = [cc[0], cc[1]] if len(cc) >= 2 else [cc[0]]
+            fig = px.treemap(df, path=path, values=nc[0], color=nc[0],
+                             color_continuous_scale=["#1a2035","#f0c040","#fb7185"],
+                             title=f"Treemap — {nc[0].replace('_',' ').title()} Hierarchy")
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            return fig
+        _add("Treemap", _c12)
 
-        # 13 Histogram + box marginal
-        if nc:
-            fig = px.histogram(df,x=nc[0],color=cc[0] if cc else None,
-                               color_discrete_sequence=DASH_COLORS,marginal="box",opacity=0.82,nbins=30,
-                               title=f"Histogram — {nc[0].replace('_',' ').title()}")
-            fig.update_traces(marker_line_width=0.5,marker_line_color="#131720")
-            fig.update_layout(**PLOTLY_THEME,title_x=0.)
-            _add("Histogram + Box", fig)
+    # 13 ── Histogram with box marginal
+    if nc:
+        def _c13():
+            fig = px.histogram(df, x=nc[0],
+                               color=cc[0] if cc else None,
+                               color_discrete_sequence=DASH_COLORS,
+                               marginal="box", opacity=0.82, nbins=30,
+                               title=f"Distribution — {nc[0].replace('_',' ').title()}")
+            fig.update_traces(marker_line_width=0.5, marker_line_color="#131720")
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            return fig
+        _add("Histogram", _c13)
 
-        # 14 Bubble chart
-        if len(nc) >= 3:
-            sample = df.sample(min(200,len(df)),random_state=42)
-            fig = px.scatter(sample,x=nc[0],y=nc[1],size=nc[2],
+    # 14 ── Bubble chart
+    if len(nc) >= 3:
+        def _c14():
+            sample = df.sample(min(200, len(df)), random_state=42)
+            fig = px.scatter(sample, x=nc[0], y=nc[1], size=nc[2],
                              color=cc[0] if cc else nc[2],
-                             color_discrete_sequence=DASH_COLORS,color_continuous_scale="Viridis",
-                             opacity=0.75,size_max=40,
-                             title=f"Bubble — {nc[0]} vs {nc[1]} sized by {nc[2]}")
-            fig.update_layout(**PLOTLY_THEME,title_x=0.)
-            _add("Bubble Chart", fig)
-
-    except Exception:
-        pass
+                             color_discrete_sequence=DASH_COLORS,
+                             color_continuous_scale="Viridis",
+                             opacity=0.75, size_max=40,
+                             title=f"Bubble — {nc[0]} vs {nc[1]} (size: {nc[2]})")
+            fig.update_layout(**PLOTLY_THEME, title_x=0.)
+            return fig
+        _add("Bubble Chart", _c14)
 
     return {"kpis": kpi_tiles, "charts": charts}
 
@@ -1003,7 +1045,7 @@ def _fig_to_image(fig, rl_image_cls, width_cm=14, height_cm=7, cm_unit=None):
     except Exception:
         return None
 
-def _common_styles(sty, rc):
+def _common_styles(sty, rc, ParagraphStyle):
     """Return shared paragraph styles dict."""
     GOLD   = rc.HexColor("#996600");  VIOLET = rc.HexColor("#5b21b6")
     BLUE   = rc.HexColor("#1e40af");  GREEN  = rc.HexColor("#166534")
@@ -1079,7 +1121,7 @@ def make_pdf(history):
 
     HAS_KALEIDO = _check_kaleido()
     sty   = getSampleStyleSheet()
-    styles = _common_styles(sty, rc)
+    styles = _common_styles(sty, rc, ParagraphStyle)
     BLUE=styles["BLUE"]; VIOLET=styles["VIOLET"]; GRAY=styles["GRAY"]
     LTGRAY=styles["LTGRAY"]; MDGRAY=styles["MDGRAY"]; WHITE=styles["WHITE"]
     RED=styles["RED"]; GREEN=styles["GREEN"]
@@ -1441,12 +1483,12 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
 
     # ── BACK COVER ────────────────────────────────────────────────────
     elems.append(PageBreak()); elems.append(Spacer(1,4*cm))
-    elems.append(P("NLDA Pro · Elite Data Intelligence",
+    elems.append(P("NLDA Pro · Business Data Intelligence",
                    S("fp",fontSize=16,textColor=GOLD,fontName="Helvetica-Bold",spaceAfter=8,alignment=TA_CENTER)))
     elems.append(P(f"Report generated {datetime.now().strftime('%d %B %Y at %H:%M')}",
                    S("fd",fontSize=10,textColor=DKGRAY,spaceAfter=4,alignment=TA_CENTER)))
     elems.append(HR(0.5,GOLD,10))
-    elems.append(P("Powered by AI · Built with NLDA Pro v5.1",
+    elems.append(P("Powered by AI · Powered by NLDA Pro",
                    S("fdt",fontSize=9,textColor=DKGRAY,spaceAfter=2,alignment=TA_CENTER)))
 
     doc.build(elems)
@@ -1733,7 +1775,7 @@ with st.sidebar:
     st.markdown("""<div class="logo-bar">
         <span class="logo-hex">⬡</span>
         <span class="logo-name">NLDA Pro</span>
-        <span class="logo-tag">Elite Data Intelligence · v5.0</span>
+        <span class="logo-tag">Business Data Intelligence </span>
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="sb-sec">AI Provider</div>', unsafe_allow_html=True)
@@ -1847,7 +1889,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────
 st.markdown("""<div class="hero">
     <div class="hero-grid"></div><div class="hero-glow"></div><div class="hero-glow2"></div><div class="hero-glow3"></div>
-    <div class="hero-eye">Elite Data Intelligence Platform · v5.0</div>
+    <div class="hero-eye">Business Data Intelligence Platform </div>
     <h1 class="hero-title">Your data has<br><span>a story to tell.</span></h1>
     <p class="hero-sub">Ask anything in plain English. Get charts, insights, per-query narratives, AI data stories, and professional PDF reports — all in seconds.</p>
     <div class="hero-badges">
@@ -1989,46 +2031,24 @@ if st.session_state.get("show_autodash"):
 
         st.markdown('</div>', unsafe_allow_html=True)  # close pbi-wrap header portion
 
-        # ── Charts Grid ─────────────────────────────────────────────
+        # ── Charts Grid — render ALL charts in responsive 2-col grid ──
         charts = dash["charts"]
         if charts:
-            # Row 1: 2 wide charts
-            if len(charts) >= 2:
-                col1, col2 = st.columns(2)
-                for ci, col in enumerate([col1, col2]):
-                    if ci < len(charts):
-                        lbl, fig = charts[ci]
-                        with col:
-                            st.markdown(f'<div class="pbi-chart-label">{lbl}</div>',
-                                        unsafe_allow_html=True)
-                            st.plotly_chart(fig, use_container_width=True,
-                                            key=f"pbi_{dn}_{ci}")
-
-            # Row 2: 3 medium charts
-            if len(charts) >= 5:
-                col1, col2, col3 = st.columns(3)
-                for ci, col in enumerate([col1, col2, col3]):
-                    idx = ci + 2
-                    if idx < len(charts):
-                        lbl, fig = charts[idx]
-                        with col:
-                            st.markdown(f'<div class="pbi-chart-label">{lbl}</div>',
-                                        unsafe_allow_html=True)
-                            st.plotly_chart(fig, use_container_width=True,
-                                            key=f"pbi_{dn}_{idx}")
-
-            # Row 3: remaining charts
-            remaining = charts[5:]
-            if remaining:
-                rcols = st.columns(min(2, len(remaining)))
-                for ci, (lbl, fig) in enumerate(remaining):
-                    with rcols[ci % len(rcols)]:
-                        st.markdown(f'<div class="pbi-chart-label">{lbl}</div>',
-                                    unsafe_allow_html=True)
+            # Render in pairs (2-column grid)
+            for row_start in range(0, len(charts), 2):
+                pair = charts[row_start:row_start+2]
+                cols_list = st.columns(len(pair))
+                for ci, (lbl, fig) in enumerate(pair):
+                    with cols_list[ci]:
+                        st.markdown(
+                            f'<div style="font-family:var(--fm);font-size:9px;'
+                            f'color:var(--t3);letter-spacing:.12em;text-transform:uppercase;'
+                            f'padding:8px 4px 4px">{lbl}</div>',
+                            unsafe_allow_html=True)
                         st.plotly_chart(fig, use_container_width=True,
-                                        key=f"pbi_{dn}_r{ci}")
+                                        key=f"pbi_{dn}_{row_start}_{ci}")
         else:
-            st.info(f"Not enough column types to build a full dashboard for {dn}.")
+            st.warning(f"No charts could be generated for {dn}. Check that the dataset has numeric and categorical columns.")
 
         # ── Footer ──────────────────────────────────────────────────
         st.markdown(f"""<div style="background:var(--base);border:1px solid var(--bd0);
