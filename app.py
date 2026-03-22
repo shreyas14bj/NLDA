@@ -449,6 +449,104 @@ def col_profile(df):
         p[col]=info
     return p
 
+def clean_dataframe(df):
+    """
+    Auto data-cleaning pipeline applied on every upload:
+    1. Strip whitespace from column names, lowercase, remove special chars
+    2. Drop fully empty rows and columns
+    3. Remove duplicate rows
+    4. Strip whitespace from string columns
+    5. Coerce columns that look numeric but are stored as strings
+    6. Drop unnamed index columns (Unnamed: 0, etc.)
+    7. Forward-fill single isolated NaN in numeric columns (≤5% missing)
+    Returns (cleaned_df, report_lines)
+    """
+    report = []
+    orig_rows, orig_cols = len(df), len(df.columns)
+
+    # 1. Clean column names
+    new_cols = {}
+    for c in df.columns:
+        nc = str(c).strip()
+        nc = re.sub(r'[^\w\s]', '', nc)          # remove special chars
+        nc = re.sub(r'\s+', '_', nc).lower()      # spaces → underscore, lowercase
+        nc = re.sub(r'_+', '_', nc).strip('_')    # collapse multiple underscores
+        if nc != str(c).strip():
+            new_cols[c] = nc
+    if new_cols:
+        df = df.rename(columns=new_cols)
+        report.append(f"Renamed {len(new_cols)} column(s) to clean names")
+
+    # 2. Drop unnamed index columns (Unnamed: 0, col_0, etc.)
+    unnamed = [c for c in df.columns
+               if re.match(r'^(unnamed[_\s]?\d*|col_\d+)$', c.lower())]
+    if unnamed:
+        df = df.drop(columns=unnamed)
+        report.append(f"Dropped {len(unnamed)} unnamed/index column(s): {unnamed}")
+
+    # 3. Drop fully empty columns and rows
+    empty_cols = [c for c in df.columns if df[c].isna().all()]
+    if empty_cols:
+        df = df.drop(columns=empty_cols)
+        report.append(f"Removed {len(empty_cols)} fully empty column(s)")
+    df = df.dropna(how='all')
+
+    # 4. Remove exact duplicate rows
+    dupes = df.duplicated().sum()
+    if dupes:
+        df = df.drop_duplicates()
+        report.append(f"Removed {dupes:,} duplicate row(s)")
+
+    # 5. Strip whitespace from string/object columns
+    for col in df.select_dtypes(include='object').columns:
+        try:
+            df[col] = df[col].str.strip()
+        except Exception:
+            pass
+
+    # 6. Coerce string columns that look numeric (>80% parseable)
+    for col in df.select_dtypes(include='object').columns:
+        if any(kw in col.lower() for kw in ["date","time","period","month","year","week"]):
+            continue
+        try:
+            sample = df[col].dropna()
+            if len(sample) == 0: continue
+            # Remove commas/currency symbols and try parsing
+            cleaned = sample.astype(str).str.replace(r'[,$%€£]','',regex=True).str.strip()
+            numeric = pd.to_numeric(cleaned, errors='coerce')
+            pct_numeric = numeric.notna().mean()
+            if pct_numeric >= 0.80:
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(r'[,$%€£]','',regex=True).str.strip(),
+                    errors='coerce')
+                report.append(f"Coerced '{col}' to numeric ({pct_numeric*100:.0f}% numeric values)")
+        except Exception:
+            pass
+
+    # 7. Parse date-like columns
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            continue
+        if any(kw in col.lower() for kw in ["date","time","period","month","year","week"]):
+            try:
+                df[col] = pd.to_datetime(df[col], infer_datetime_format=True)
+                report.append(f"Parsed '{col}' as datetime")
+            except Exception:
+                pass
+
+    # 8. Fill isolated NaN in numeric columns (≤5% missing → forward-fill)
+    for col in smart_numeric_cols(df):
+        null_pct = df[col].isna().mean()
+        if 0 < null_pct <= 0.05:
+            df[col] = df[col].fillna(method='ffill').fillna(method='bfill')
+            report.append(f"Filled {int(null_pct*len(df))} missing value(s) in '{col}'")
+
+    final_rows, final_cols = len(df), len(df.columns)
+    if orig_rows != final_rows or orig_cols != final_cols:
+        report.append(f"Shape: {orig_rows}×{orig_cols} → {final_rows}×{final_cols}")
+
+    return df, report
+
 def df_schema_str(df, name):
     lines=[f"TABLE `{name}` — {len(df):,} rows x {len(df.columns)} columns"]
     for col in df.columns:
@@ -1321,21 +1419,54 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
 
     def kpi_row(kpis):
         if not kpis: return []
-        cols=min(3,len(kpis))
-        all_rows=[]
-        for row_kpis in [kpis[i:i+cols] for i in range(0,len(kpis),cols)]:
-            row_cells=[]
-            for k in row_kpis:
-                cell=f"{k['icon']} {k['label']}\n{k['value']}"
-                if k.get("delta"): cell+=f"\n{k['delta']}"
-                row_cells.append(P(cell,S(f"kc",fontSize=10,textColor=BLUE,fontName="Helvetica-Bold",leading=14)))
-            while len(row_cells)<cols: row_cells.append(Paragraph("",sty["Normal"]))
-            all_rows.append(row_cells)
-        t=Table(all_rows,colWidths=[16.4*cm/cols]*cols)
-        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),LTGRAY),("GRID",(0,0),(-1,-1),0.4,MDGRAY),
-            ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
-            ("LEFTPADDING",(0,0),(-1,-1),10),("RIGHTPADDING",(0,0),(-1,-1),10),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
-        return [t,Spacer(1,0.3*cm)]
+        # Build a clean 4-column table: Label | Value | Avg | Change
+        header = [
+            P("Metric",  S("kph", fontSize=8, textColor=WHITE, fontName="Helvetica-Bold")),
+            P("Total",   S("kph2",fontSize=8, textColor=WHITE, fontName="Helvetica-Bold")),
+            P("Average", S("kph3",fontSize=8, textColor=WHITE, fontName="Helvetica-Bold")),
+            P("Trend",   S("kph4",fontSize=8, textColor=WHITE, fontName="Helvetica-Bold")),
+        ]
+        rows = [header]
+        kpi_val_s  = S("kpv2", fontSize=11, textColor=BLUE,  fontName="Helvetica-Bold", leading=14)
+        kpi_lbl_s2 = S("kpl2", fontSize=9,  textColor=GRAY,  leading=12)
+        kpi_avg_s  = S("kpa",  fontSize=9,  textColor=DKGRAY,leading=12)
+        kpi_up_s   = S("kpu",  fontSize=9,  textColor=GREEN, fontName="Helvetica-Bold")
+        kpi_dn_s   = S("kpd",  fontSize=9,  textColor=RED,   fontName="Helvetica-Bold")
+
+        for k in kpis:
+            delta = k.get("delta") or ""
+            is_up = "+" in str(delta)
+            d_style = kpi_up_s if is_up else kpi_dn_s
+            delta_txt = (("+" if is_up else "") + str(delta)) if delta else "-"
+            rows.append([
+                P(_st(k.get("label","")), kpi_lbl_s2),
+                P(_st(k.get("value","")), kpi_val_s),
+                P(_st(k.get("avg","-")),  kpi_avg_s),
+                P(_st(delta_txt),          d_style),
+            ])
+
+        cw = [6*cm, 3.5*cm, 3.5*cm, 3*cm]
+        t = Table(rows, colWidths=cw, repeatRows=1)
+        t.setStyle(TableStyle([
+            # Header
+            ("BACKGROUND",    (0,0), (-1,0), VIOLET),
+            ("TEXTCOLOR",     (0,0), (-1,0), WHITE),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,0), 8),
+            ("ALIGN",         (0,0), (-1,0), "CENTER"),
+            # Data rows
+            ("FONTNAME",      (0,1), (-1,-1), "Helvetica"),
+            ("FONTSIZE",      (0,1), (-1,-1), 9),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [WHITE, LTGRAY]),
+            ("TOPPADDING",    (0,0), (-1,-1), 6),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("LEFTPADDING",   (0,0), (-1,-1), 8),
+            ("RIGHTPADDING",  (0,0), (-1,-1), 8),
+            ("GRID",          (0,0), (-1,-1), 0.4, MDGRAY),
+            ("LINEBELOW",     (0,0), (-1,0),  1.2, VIOLET),
+            ("ALIGN",         (1,1), (-1,-1), "RIGHT"),
+        ]))
+        return [t, Spacer(1, 0.3*cm)]
 
     def stat_table(df):
         nc2=smart_numeric_cols(df)
@@ -1809,14 +1940,15 @@ with st.sidebar:
             if nm not in st.session_state.dataframes:
                 try:
                     dfup=pd.read_csv(uf) if uf.name.endswith(".csv") else pd.read_excel(uf)
-                    for col in dfup.columns:
-                        if any(kw in col.lower() for kw in ["date","time","period","month","year"]):
-                            try: dfup[col]=pd.to_datetime(dfup[col])
-                            except: pass
+                    # ── Auto data cleaning ──────────────────────────────
+                    dfup, clean_report = clean_dataframe(dfup)
                     st.session_state.dataframes[nm]=dfup
                     st.session_state.df_meta[nm]=col_profile(dfup)
-                    st.success(f"✓ {nm} ({len(dfup):,} rows)")
-                except Exception as e: st.error(f"Error: {e}")
+                    msg = f"✓ **{nm}** — {len(dfup):,} rows, {len(dfup.columns)} columns"
+                    if clean_report:
+                        msg += "\n\n**Auto-cleaned:**\n" + "\n".join(f"• {r}" for r in clean_report)
+                    st.success(msg)
+                except Exception as e: st.error(f"Error loading {uf.name}: {e}")
 
     for dn,dd in list(st.session_state.dataframes.items()):
         nc=len(smart_numeric_cols(dd))
@@ -2692,17 +2824,32 @@ for i,(col,sug) in enumerate(zip(chip_cols,CHIPS)):
         if st.button(sug,key=f"chip_{i}"): prefill=sug
 
 st.markdown('<div class="q-wrap">',unsafe_allow_html=True)
-st.markdown('<div class="q-lbl">Natural Language Query</div>',unsafe_allow_html=True)
-qkey=f"main_q_{st.session_state.get('query_counter',0)}"
-query=st.text_input("q",value=prefill,
-    placeholder='e.g. "Show profit margin by region as a violin chart and highlight outliers"',
-    label_visibility="collapsed",key=qkey)
-qc1,qc2,qc3,qc4=st.columns([2,1,1,5])
-with qc1: run=st.button("⬡  Analyze",use_container_width=True,key="run_btn",type="primary")
-with qc2: deep=st.checkbox("Deep",value=False,help="More thorough analysis")
-with qc3:
-    if st.button("✕ Clear",key="clear_q"):
-        st.session_state["query_counter"]=st.session_state.get("query_counter",0)+1; st.rerun()
+st.markdown('<div class="q-lbl">Natural Language Query — press Enter or click Analyze</div>',unsafe_allow_html=True)
+
+# Use st.form so pressing Enter submits the query
+with st.form(key="query_form", clear_on_submit=True):
+    qkey = f"main_q_{st.session_state.get('query_counter',0)}"
+    query = st.text_input(
+        "q", value=prefill,
+        placeholder='e.g. "Show profit margin by region as a violin chart"',
+        label_visibility="collapsed",
+        key=qkey)
+    fc1, fc2, fc3 = st.columns([2, 1, 1])
+    with fc1:
+        run = st.form_submit_button(
+            "⬡  Analyze",
+            use_container_width=True,
+            type="primary")
+    with fc2:
+        deep = st.checkbox("Deep mode", value=False,
+                           help="More thorough analysis")
+    with fc3:
+        clear_pressed = st.form_submit_button("✕ Clear", use_container_width=True)
+
+if clear_pressed if 'clear_pressed' in dir() else False:
+    st.session_state["query_counter"] = st.session_state.get("query_counter",0)+1
+    st.rerun()
+
 st.markdown('</div>',unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
