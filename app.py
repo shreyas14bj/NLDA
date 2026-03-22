@@ -1115,17 +1115,352 @@ def _check_rl():
     except ImportError: raise RuntimeError("Install reportlab: pip install reportlab")
 
 def _check_kaleido():
-    """Return True only if kaleido can actually render a figure."""
+    """Not needed — we use matplotlib for PDF charts. Always returns False."""
+    return False
+
+
+# ── Matplotlib chart renderer — zero external dependencies ────────────
+# PDF charts are rendered via matplotlib so kaleido is never needed.
+
+MPL_COLORS = [
+    "#2563eb","#d97706","#7c3aed","#059669","#dc2626",
+    "#0891b2","#db2777","#65a30d","#ea580c","#6d28d9",
+    "#0d9488","#b45309","#be185d","#4d7c0f","#b91c1c",
+]
+
+def _mpl_setup():
+    """Configure matplotlib for clean PDF-ready charts."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    plt.rcParams.update({
+        "figure.facecolor":  "#0e1117",
+        "axes.facecolor":    "#131720",
+        "axes.edgecolor":    "#232b40",
+        "axes.labelcolor":   "#94a3b8",
+        "axes.titlecolor":   "#f0c040",
+        "axes.titlesize":    11,
+        "axes.labelsize":    9,
+        "axes.grid":         True,
+        "grid.color":        "#1a2035",
+        "grid.linewidth":    0.6,
+        "text.color":        "#f1f5f9",
+        "xtick.color":       "#475569",
+        "ytick.color":       "#475569",
+        "xtick.labelsize":   8,
+        "ytick.labelsize":   8,
+        "legend.facecolor":  "#181e2b",
+        "legend.edgecolor":  "#232b40",
+        "legend.fontsize":   8,
+        "figure.dpi":        150,
+        "savefig.dpi":       150,
+        "savefig.facecolor": "#0e1117",
+        "font.family":       "DejaVu Sans",
+    })
+    return plt, mpatches
+
+
+def _mpl_to_bytes(fig, plt):
+    """Render matplotlib figure to PNG bytes and close figure."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def _mpl_bar(df, x, y, title, horizontal=False):
+    plt, _ = _mpl_setup()
+    data   = df.groupby(x)[y].sum().reset_index().sort_values(y, ascending=horizontal).head(12)
+    vals   = data[y].tolist()
+    labels = [str(v)[:15] for v in data[x].tolist()]
+    colors = [MPL_COLORS[i % len(MPL_COLORS)] for i in range(len(vals))]
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    if horizontal:
+        bars = ax.barh(labels, vals, color=colors, height=0.65)
+        ax.set_xlabel(y.replace("_"," ").title())
+        for bar, val in zip(bars, vals):
+            ax.text(val*1.01, bar.get_y()+bar.get_height()/2,
+                    f"{val:,.0f}", va="center", fontsize=7, color="#f1f5f9")
+    else:
+        bars = ax.bar(labels, vals, color=colors, width=0.7)
+        ax.set_ylabel(y.replace("_"," ").title())
+        for bar, val in zip(bars, vals):
+            ax.text(bar.get_x()+bar.get_width()/2, val*1.02,
+                    f"{val:,.0f}", ha="center", fontsize=7, color="#f1f5f9")
+        plt.xticks(rotation=30, ha="right")
+    ax.set_title(title, pad=10)
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_line(df, x, y, title):
+    plt, _ = _mpl_setup()
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(range(len(df)), df[y].tolist(),
+            color=MPL_COLORS[0], linewidth=2.5, marker="o", markersize=4)
+    ax.fill_between(range(len(df)), df[y].tolist(),
+                    alpha=0.12, color=MPL_COLORS[0])
+    # x-ticks: show ~8 labels
+    xs = df[x].astype(str).tolist()
+    step = max(1, len(xs)//8)
+    ax.set_xticks(range(0, len(xs), step))
+    ax.set_xticklabels([xs[i] for i in range(0, len(xs), step)],
+                       rotation=30, ha="right")
+    ax.set_title(title, pad=10)
+    ax.set_ylabel(y.replace("_"," ").title())
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_pie(df, x, y, title, donut=False):
+    plt, _ = _mpl_setup()
+    data   = df.groupby(x)[y].sum().reset_index()
+    vals   = data[y].tolist()
+    labels = [str(v)[:14] for v in data[x].tolist()]
+    fig, ax = plt.subplots(figsize=(7, 5))
+    wedge_props = {"linewidth":2, "edgecolor":"#0e1117"}
+    if donut:
+        ax.pie(vals, labels=labels, colors=MPL_COLORS[:len(vals)],
+               autopct="%1.1f%%", pctdistance=0.82, startangle=90,
+               wedgeprops={**wedge_props, "width":0.55})
+        ax.text(0, 0, f"Total\n{sum(vals):,.0f}", ha="center", va="center",
+                fontsize=9, color="#f0c040", fontweight="bold")
+    else:
+        ax.pie(vals, labels=labels, colors=MPL_COLORS[:len(vals)],
+               autopct="%1.1f%%", startangle=90, wedgeprops=wedge_props)
+    ax.set_title(title, pad=12, color="#f0c040")
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_scatter(df, x, y, hue, title):
+    plt, _ = _mpl_setup()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    if hue and hue in df.columns:
+        cats = df[hue].unique()
+        for i, cat in enumerate(cats[:10]):
+            sub = df[df[hue]==cat]
+            ax.scatter(sub[x], sub[y], label=str(cat)[:12],
+                       color=MPL_COLORS[i % len(MPL_COLORS)],
+                       alpha=0.65, s=30, edgecolors="none")
+        ax.legend(loc="best", framealpha=0.6)
+    else:
+        ax.scatter(df[x], df[y], color=MPL_COLORS[0], alpha=0.55, s=25)
+        # trend line
+        try:
+            m, b = np.polyfit(df[x].fillna(0), df[y].fillna(0), 1)
+            xs   = np.linspace(df[x].min(), df[x].max(), 80)
+            ax.plot(xs, m*xs+b, "--", color=MPL_COLORS[4], linewidth=1.5, alpha=0.8)
+        except Exception:
+            pass
+    ax.set_xlabel(x.replace("_"," ").title()); ax.set_ylabel(y.replace("_"," ").title())
+    ax.set_title(title, pad=10)
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_box(df, x, y, title):
+    plt, _ = _mpl_setup()
+    groups = {str(k): g[y].dropna().tolist() for k,g in df.groupby(x) if len(g)>0}
+    if not groups: return None
+    fig, ax = plt.subplots(figsize=(9, 5))
+    bp = ax.boxplot(list(groups.values()), patch_artist=True, notch=True,
+                    medianprops=dict(color="#f0c040", linewidth=2),
+                    whiskerprops=dict(color="#94a3b8"),
+                    capprops=dict(color="#94a3b8"),
+                    flierprops=dict(marker=".", color="#fb7185", markersize=3))
+    for patch, color in zip(bp["boxes"], MPL_COLORS):
+        patch.set_facecolor(color); patch.set_alpha(0.7)
+    ax.set_xticks(range(1, len(groups)+1))
+    ax.set_xticklabels([k[:12] for k in groups.keys()], rotation=30, ha="right")
+    ax.set_title(title, pad=10); ax.set_ylabel(y.replace("_"," ").title())
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_heatmap(df, nc, title):
+    plt, _ = _mpl_setup()
+    corr = df[nc[:12]].corr().round(2)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(corr.values, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+    plt.colorbar(im, ax=ax, shrink=0.8)
+    labels = [c.replace("_"," ")[:10] for c in corr.columns]
+    ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=7)
+    ax.set_yticks(range(len(labels))); ax.set_yticklabels(labels, fontsize=7)
+    for i in range(len(labels)):
+        for j in range(len(labels)):
+            ax.text(j, i, f"{corr.values[i,j]:.2f}", ha="center", va="center",
+                    fontsize=6, color="white" if abs(corr.values[i,j])>0.5 else "#94a3b8")
+    ax.set_title(title, pad=10)
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_histogram(df, x, hue, title):
+    plt, _ = _mpl_setup()
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if hue and hue in df.columns:
+        for i, (cat, sub) in enumerate(df.groupby(hue)):
+            ax.hist(sub[x].dropna(), bins=25, alpha=0.65,
+                    label=str(cat)[:12], color=MPL_COLORS[i % len(MPL_COLORS)])
+        ax.legend(loc="best", framealpha=0.6)
+    else:
+        ax.hist(df[x].dropna(), bins=30, color=MPL_COLORS[0], alpha=0.8, edgecolor="#131720", linewidth=0.4)
+    ax.set_xlabel(x.replace("_"," ").title()); ax.set_ylabel("Count")
+    ax.set_title(title, pad=10)
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_stacked_bar(df, x, y, hue, title):
+    plt, _ = _mpl_setup()
+    pivot = df.groupby([x, hue])[y].sum().unstack(fill_value=0)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    bottom = np.zeros(len(pivot))
+    for i, col in enumerate(pivot.columns):
+        ax.bar(pivot.index.astype(str), pivot[col], bottom=bottom,
+               color=MPL_COLORS[i % len(MPL_COLORS)], label=str(col)[:14], width=0.65)
+        bottom += pivot[col].values
+    ax.set_title(title, pad=10); ax.set_ylabel(y.replace("_"," ").title())
+    ax.legend(loc="upper right", framealpha=0.5, fontsize=7)
+    plt.xticks(rotation=30, ha="right")
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_area(df, x, y, hue, title):
+    plt, _ = _mpl_setup()
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    if hue and hue in df.columns:
+        pivot = df.groupby([x, hue])[y].sum().unstack(fill_value=0)
+        xs = range(len(pivot))
+        bottom = np.zeros(len(pivot))
+        for i, col in enumerate(pivot.columns):
+            vals = pivot[col].values
+            ax.fill_between(xs, bottom, bottom+vals,
+                            alpha=0.6, color=MPL_COLORS[i%len(MPL_COLORS)], label=str(col)[:14])
+            bottom += vals
+        labels = pivot.index.astype(str).tolist()
+        step = max(1, len(labels)//8)
+        ax.set_xticks(list(range(0,len(labels),step)))
+        ax.set_xticklabels([labels[i] for i in range(0,len(labels),step)], rotation=30, ha="right")
+        ax.legend(loc="upper left", framealpha=0.5, fontsize=7)
+    else:
+        xs = range(len(df))
+        ax.fill_between(xs, df[y].tolist(), alpha=0.4, color=MPL_COLORS[0])
+        ax.plot(xs, df[y].tolist(), color=MPL_COLORS[0], linewidth=2)
+    ax.set_title(title, pad=10); ax.set_ylabel(y.replace("_"," ").title())
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_grouped_bar(df, x, metrics, title):
+    plt, _ = _mpl_setup()
+    cats = df[x].astype(str).tolist()[:12]
+    n = len(metrics); width = 0.8/n
+    xs = np.arange(len(cats))
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for i, m in enumerate(metrics):
+        vals = [df[df[x].astype(str)==c][m].sum() if c in df[x].astype(str).values else 0 for c in cats]
+        ax.bar(xs + i*width - (n-1)*width/2, vals, width*0.9,
+               color=MPL_COLORS[i%len(MPL_COLORS)], label=m.replace("_"," ").title(), alpha=0.88)
+    ax.set_xticks(xs); ax.set_xticklabels(cats, rotation=30, ha="right")
+    ax.set_title(title, pad=10); ax.legend(loc="best", framealpha=0.6, fontsize=8)
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _mpl_treemap(df, x, y, title):
+    """Simple squarified treemap using matplotlib rectangles."""
+    plt, _ = _mpl_setup()
+    data = df.groupby(x)[y].sum().reset_index().sort_values(y, ascending=False).head(16)
+    vals = data[y].tolist(); labels = data[x].tolist()
+    total = sum(vals)
+    if total == 0: return None
+    fracs = [v/total for v in vals]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.set_xlim(0,1); ax.set_ylim(0,1); ax.set_aspect("equal")
+    ax.axis("off")
+    x0=0; y0=0; w=1; h=1
+    rects=[]
+    remaining=list(zip(fracs,labels,MPL_COLORS[:len(fracs)]))
+    # simple slicing treemap
+    hor=True; cx=0; cy=0; cw=1; ch=1
+    for frac,lbl,clr in remaining:
+        if hor:
+            rw=cw*frac/sum(f for f,_,_ in remaining)
+            rects.append((cx,cy,rw,ch,lbl,frac,clr))
+            cx+=rw; cw-=rw
+        else:
+            rh=ch*frac/sum(f for f,_,_ in remaining)
+            rects.append((cx,cy,cw,rh,lbl,frac,clr))
+            cy+=rh; ch-=rh
+    for rx,ry,rw,rh,lbl,frac,clr in rects:
+        rect=plt.Rectangle((rx,ry),rw,rh,facecolor=clr,edgecolor="#0e1117",linewidth=1.5)
+        ax.add_patch(rect)
+        if rw>0.05 and rh>0.04:
+            ax.text(rx+rw/2,ry+rh/2,f"{str(lbl)[:12]}\n{frac*100:.1f}%",
+                    ha="center",va="center",fontsize=min(8,max(5,int(rw*40))),
+                    color="white",fontweight="bold")
+    ax.set_title(title,pad=10,color="#f0c040")
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
+def _build_mpl_chart(label, df, nc, cc, dc):
+    """
+    Build a matplotlib PNG for a given chart label using dataset columns.
+    Returns PNG bytes or None.
+    """
     try:
-        import plotly.io as pio
-        import plotly.graph_objects as _go
-        # Render a tiny test figure — confirms kaleido binary works
-        _test = _go.Figure(_go.Scatter(x=[1], y=[1]))
-        _bytes = pio.to_image(_test, format="png", width=50, height=50,
-                              scale=1, engine="kaleido")
-        return len(_bytes) > 100
+        t = label
+        if "Top Performers" in label and cc and nc:
+            return _mpl_bar(df, cc[0], nc[0], t)
+        elif "Trend" in label and dc and nc:
+            td = df.copy()
+            td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
+            td2 = td.groupby("_p")[nc[0]].sum().reset_index()
+            td2.columns = ["Period", nc[0]]
+            return _mpl_line(td2, "Period", nc[0], t)
+        elif "Market Share" in label and cc and nc:
+            g = df.groupby(cc[0])[nc[0]].sum().reset_index()
+            return _mpl_pie(g, cc[0], nc[0], t, donut=True)
+        elif "Scatter" in label and len(nc)>=2:
+            s = df.sample(min(300, len(df)), random_state=42)
+            return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
+        elif "Correlation Matrix" in label and len(nc)>=3:
+            return _mpl_heatmap(df, nc, t)
+        elif "Box" in label and cc and nc:
+            return _mpl_box(df, cc[0], nc[0], t)
+        elif "Stacked" in label and len(cc)>=2 and nc:
+            return _mpl_stacked_bar(df, cc[0], nc[0], cc[1], t)
+        elif "Rankings" in label and cc and nc:
+            return _mpl_bar(df, cc[0], nc[0], t, horizontal=True)
+        elif "Multi-Metric" in label and len(nc)>=2 and cc:
+            return _mpl_grouped_bar(df.groupby(cc[0])[nc[:3]].sum().reset_index(), cc[0], nc[:3], t)
+        elif "Area" in label and dc and nc:
+            td = df.copy()
+            td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
+            return _mpl_area(td, "_p", nc[0], cc[0] if cc else None, t)
+        elif "Violin" in label and cc and nc:
+            return _mpl_box(df, cc[0], nc[0], t)   # box as violin fallback
+        elif "Treemap" in label and cc and nc:
+            return _mpl_treemap(df, cc[0], nc[0], t)
+        elif "Histogram" in label and nc:
+            return _mpl_histogram(df, nc[0], cc[0] if cc else None, t)
+        elif "Bubble" in label and len(nc)>=2:
+            s = df.sample(min(200, len(df)), random_state=42)
+            return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
+        else:
+            # Fallback: bar if possible
+            if cc and nc:
+                return _mpl_bar(df, cc[0], nc[0], t)
     except Exception:
-        return False
+        pass
+    return None
 
 def _rl_imports():
     from reportlab.lib.pagesizes import A4, landscape
@@ -1142,23 +1477,126 @@ def _rl_imports():
 
 def _fig_to_image(fig, rl_image_cls, width_cm=14, height_cm=7, cm_unit=None):
     """
-    Convert a Plotly figure to a ReportLab Image flowable.
-    Tries plotly.io.to_image (works with kaleido 0.1.x and 0.2.x).
-    Returns None (not raises) if conversion fails.
+    Convert a Plotly figure to PNG bytes, then wrap in a ReportLab Image.
+    Uses matplotlib (no kaleido needed): extracts data from the plotly figure
+    and redraws with matplotlib.
     """
     if fig is None: return None
+    cm_ = cm_unit or 1
     try:
-        import plotly.io as pio
-        cm_ = cm_unit or 1
-        # Use pio.to_image — works across all kaleido versions
-        img_bytes = pio.to_image(
-            fig, format="png",
-            width=int(width_cm * 96),   # ~96 px per cm at screen resolution
-            height=int(height_cm * 96),
-            scale=2,                    # 2x for crisp print quality
-            engine="kaleido"
-        )
-        img_io = io.BytesIO(img_bytes)
+        plt, _ = _mpl_setup()
+        # Extract the first trace data from the plotly figure
+        data  = fig.data
+        layout= fig.layout
+        title = str(layout.title.text or "") if layout.title else ""
+
+        if not data:
+            return None
+
+        trace0 = data[0]
+        ttype  = type(trace0).__name__.lower()  # bar, scatter, pie, heatmap, …
+
+        fig2, ax = plt.subplots(figsize=(width_cm*0.45, height_cm*0.45))
+
+        if "bar" in ttype:
+            xs = list(trace0.x or [])
+            ys = [float(v) if v is not None else 0 for v in (trace0.y or [])]
+            if getattr(trace0, "orientation", "v") == "h":
+                ax.barh(range(len(ys)), ys,
+                        color=[MPL_COLORS[i%len(MPL_COLORS)] for i in range(len(ys))])
+                ax.set_yticks(range(len(xs)))
+                ax.set_yticklabels([str(x)[:14] for x in xs], fontsize=7)
+            else:
+                ax.bar(range(len(xs)), ys,
+                       color=[MPL_COLORS[i%len(MPL_COLORS)] for i in range(len(xs))])
+                ax.set_xticks(range(len(xs)))
+                ax.set_xticklabels([str(x)[:14] for x in xs],
+                                   rotation=30, ha="right", fontsize=7)
+            for i in range(len(data)):  # stacked/grouped
+                if i == 0: continue
+                t2 = data[i]
+                ys2 = [float(v) if v is not None else 0 for v in (t2.y or [])]
+                ax.bar(range(len(ys2)), ys2, label=str(t2.name or ""),
+                       color=MPL_COLORS[i%len(MPL_COLORS)], alpha=0.75)
+
+        elif "scatter" in ttype or "line" in ttype:
+            for i, tr in enumerate(data):
+                x_vals = list(tr.x or [])
+                y_vals = [float(v) if v is not None else 0 for v in (tr.y or [])]
+                mode   = str(getattr(tr, "mode","lines") or "lines")
+                lw  = 2.0 if "lines" in mode else 0
+                ms  = 5   if "markers" in mode else 0
+                ax.plot(range(len(x_vals)), y_vals,
+                        color=MPL_COLORS[i%len(MPL_COLORS)],
+                        linewidth=lw, marker="o" if ms else None, markersize=ms,
+                        label=str(tr.name or ""), alpha=0.85)
+            # x labels
+            xs = list(data[0].x or [])
+            step = max(1, len(xs)//7)
+            ax.set_xticks(range(0, len(xs), step))
+            ax.set_xticklabels([str(xs[i])[:12] for i in range(0,len(xs),step)],
+                               rotation=30, ha="right", fontsize=7)
+            if len(data)>1: ax.legend(loc="best", fontsize=7, framealpha=0.5)
+
+        elif "pie" in ttype:
+            vals   = [float(v) if v is not None else 0 for v in (trace0.values or [])]
+            labels = [str(l)[:14] for l in (trace0.labels or [])]
+            hole   = float(getattr(trace0,"hole",0) or 0)
+            wprops = {"linewidth":1.5,"edgecolor":"#0e1117"}
+            if hole > 0:
+                ax.pie(vals, labels=labels, colors=MPL_COLORS[:len(vals)],
+                       autopct="%1.0f%%", pctdistance=0.82, startangle=90,
+                       wedgeprops={**wprops,"width":1-hole})
+            else:
+                ax.pie(vals, labels=labels, colors=MPL_COLORS[:len(vals)],
+                       autopct="%1.0f%%", startangle=90, wedgeprops=wprops)
+            ax.set_aspect("equal")
+
+        elif "heatmap" in ttype or "image" in ttype:
+            z = trace0.z
+            if z is not None:
+                z_arr = np.array([[float(v) if v is not None else 0 for v in row] for row in z])
+                im = ax.imshow(z_arr, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
+                plt.colorbar(im, ax=ax, shrink=0.8)
+                if hasattr(trace0, "x") and trace0.x is not None:
+                    cols = [str(c)[:10] for c in trace0.x]
+                    ax.set_xticks(range(len(cols))); ax.set_xticklabels(cols, rotation=45, ha="right", fontsize=6)
+                    ax.set_yticks(range(len(cols))); ax.set_yticklabels(cols, fontsize=6)
+
+        elif "box" in ttype or "violin" in ttype:
+            # group by x values
+            groups = {}
+            for tr in data:
+                key = str(tr.name or "data")[:12]
+                vals = [float(v) for v in (tr.y or []) if v is not None]
+                if vals: groups[key] = vals
+            if groups:
+                bp = ax.boxplot(list(groups.values()), patch_artist=True,
+                                medianprops=dict(color="#f0c040",linewidth=1.5),
+                                whiskerprops=dict(color="#94a3b8"),
+                                capprops=dict(color="#94a3b8"))
+                for p, c in zip(bp["boxes"], MPL_COLORS):
+                    p.set_facecolor(c); p.set_alpha(0.7)
+                ax.set_xticks(range(1,len(groups)+1))
+                ax.set_xticklabels(list(groups.keys()), rotation=30, ha="right", fontsize=7)
+
+        else:
+            # Generic: if there's numeric y, bar chart
+            try:
+                ys = [float(v) for v in (data[0].y or []) if v is not None]
+                xs = list(data[0].x or range(len(ys)))
+                ax.bar(range(len(xs)), ys, color=MPL_COLORS[0], alpha=0.8)
+                ax.set_xticks(range(len(xs)))
+                ax.set_xticklabels([str(x)[:12] for x in xs], rotation=30, ha="right", fontsize=7)
+            except Exception:
+                plt.close(fig2)
+                return None
+
+        if title:
+            ax.set_title(title[:60], fontsize=9, pad=8, color="#f0c040")
+        fig2.tight_layout()
+        png = _mpl_to_bytes(fig2, plt)
+        img_io = io.BytesIO(png)
         return rl_image_cls(img_io, width=width_cm*cm_, height=height_cm*cm_)
     except Exception:
         return None
@@ -1220,12 +1658,7 @@ def _cover_page(elements, title, subtitle, meta_lines, st_obj, cm, HRFlowable,
     elements.append(Spacer(1, 0.3*cm))
     for line in meta_lines:
         elements.append(P(line, styles["sub_s"]))
-    if not HAS_KALEIDO:
-        elements.append(Spacer(1, 0.3*cm))
-        note_p = Paragraph(_st(
-            "Charts not embedded — install kaleido (pip install kaleido) to include chart images."),
-            styles["sub_s"])
-        elements.append(note_p)
+    # Charts always embedded via matplotlib
     elements.append(Spacer(1, 0.5*cm))
     elements.append(HR(0.5, MDGRAY, 16))
 
@@ -1237,7 +1670,7 @@ def make_pdf(history):
      SimpleDocTemplate, Paragraph, Spacer, HRFlowable, KeepTogether,
      Table, TableStyle, PageBreak, RLImage, TA_CENTER, TA_LEFT, TA_RIGHT) = _rl_imports()
 
-    HAS_KALEIDO = _check_kaleido()
+    HAS_KALEIDO = True  # matplotlib used — always True
     sty   = getSampleStyleSheet()
     styles = _common_styles(sty, rc, ParagraphStyle)
     BLUE=styles["BLUE"]; VIOLET=styles["VIOLET"]; GRAY=styles["GRAY"]
@@ -1397,49 +1830,17 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
                                     PageBreak, Image as RLImage)
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
-    HAS_K = _check_kaleido()
+    HAS_K = True   # Always True — matplotlib is used, no kaleido needed
 
-    buf=io.BytesIO()
-    doc=SimpleDocTemplate(buf,pagesize=A4,leftMargin=1.8*cm,rightMargin=1.8*cm,
-                          topMargin=2*cm,bottomMargin=2*cm,
-                          title="NLDA Pro Full Intelligence Report")
-    sty=getSampleStyleSheet()
-
-    GOLD=rc.HexColor("#996600"); VIOLET=rc.HexColor("#5b21b6"); BLUE=rc.HexColor("#1e40af")
-    GREEN=rc.HexColor("#166534"); RED=rc.HexColor("#991b1b"); GRAY=rc.HexColor("#374151")
-    LTGRAY=rc.HexColor("#f3f4f6"); MDGRAY=rc.HexColor("#d1d5db"); DKGRAY=rc.HexColor("#6b7280")
-    WHITE=rc.white; TEAL=rc.HexColor("#0d9488"); AMBER=rc.HexColor("#b45309")
-
-    def S(n,**kw): return ParagraphStyle(n,parent=sty["Normal"],**kw)
-    def P(t,s):    return Paragraph(_st(str(t)),s)
-    def HR(th=0.8,cl=MDGRAY,sp=8): return HRFlowable(width="100%",thickness=th,color=cl,spaceAfter=sp)
-
-    h2_s  =S("h2", fontSize=14,textColor=BLUE,  fontName="Helvetica-Bold",spaceAfter=6, spaceBefore=16)
-    h3_s  =S("h3", fontSize=11,textColor=VIOLET, fontName="Helvetica-Bold",spaceAfter=4, spaceBefore=10)
-    h4_s  =S("h4", fontSize=10,textColor=TEAL,   fontName="Helvetica-Bold",spaceAfter=3, spaceBefore=6)
-    sub_s =S("sub",fontSize=11,textColor=DKGRAY, spaceAfter=5)
-    body_s=S("body",fontSize=10,textColor=GRAY,  leading=15,spaceAfter=4)
-    bul_s =S("bul",fontSize=10,textColor=GRAY,   leading=14,spaceAfter=3,leftIndent=14,firstLineIndent=-8)
-    anom_s=S("an", fontSize=10,textColor=RED,    leading=14,spaceAfter=3,leftIndent=14,firstLineIndent=-8)
-    mono_s=S("mon",fontSize=8, textColor=DKGRAY, fontName="Courier",leading=12,spaceAfter=2,leftIndent=8)
-    story_s=S("st",fontSize=11,textColor=GRAY,   leading=18,spaceAfter=12)
-    note_s=S("nt", fontSize=9, textColor=DKGRAY, fontName="Helvetica-Oblique",spaceAfter=4)
-    chap_s=S("cp", fontSize=10,textColor=VIOLET, fontName="Helvetica-Bold",spaceAfter=4,spaceBefore=10)
-    conf_map={"high":S("ch",fontSize=9,textColor=GREEN,fontName="Helvetica-Bold",spaceAfter=3),
-              "medium":S("cm",fontSize=9,textColor=AMBER,fontName="Helvetica-Bold",spaceAfter=3),
-              "low":   S("cl",fontSize=9,textColor=RED,  fontName="Helvetica-Bold",spaceAfter=3)}
-
-    def img_from_fig(fig, w=15*cm, h=7.5*cm):
-        if not HAS_K or fig is None: return []
-        try:
-            import plotly.io as pio
-            img_bytes = pio.to_image(
-                fig, format="png",
-                width=int((w/cm)*96), height=int((h/cm)*96),
-                scale=2, engine="kaleido")
-            return [RLImage(io.BytesIO(img_bytes), width=w, height=h), Spacer(1, 0.2*cm)]
-        except Exception:
-            return []
+    # Chart image builder using matplotlib — no kaleido required
+    def img_from_fig(label, df_src, w=15*cm, h=7.5*cm):
+        nc2 = smart_numeric_cols(df_src)
+        cc2 = smart_cat_cols(df_src)
+        dc2 = [c for c in df_src.columns if pd.api.types.is_datetime64_any_dtype(df_src[c])]
+        png = _build_mpl_chart(label, df_src, nc2, cc2, dc2)
+        if png and len(png) > 200:
+            return [RLImage(io.BytesIO(png), width=w, height=h), Spacer(1, 0.2*cm)]
+        return []
 
     def kpi_row(kpis):
         if not kpis: return []
@@ -1535,8 +1936,7 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
     elems.append(P(f"Datasets: {', '.join(datasets_dict.keys())}",sub_s))
     total_dash_charts=sum(len(d.get("charts",[])) for d in dashboard_data_by_name.values())
     elems.append(P(f"Dashboard charts: {total_dash_charts}  |  Query analyses: {len(history)}",sub_s))
-    if not HAS_K:
-        elems.append(P("Tip: pip install kaleido to embed chart images in this PDF.",note_s))
+    
     elems.append(Spacer(1,0.5*cm)); elems.append(HR(0.5,MDGRAY,16))
 
     cov_data=[["Metric","Value"],
@@ -1566,12 +1966,15 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
         elems.append(P("Numeric Statistics",h3_s)); elems.extend(stat_table(dd))
         if kpis: elems.append(P("Key Performance Indicators",h3_s)); elems.extend(kpi_row(kpis))
         if dcharts:
-            elems.append(P(f"Dashboard Charts ({len(dcharts)} total)",h3_s))
-            if not HAS_K: elems.append(P("[Install kaleido: pip install kaleido]",note_s))
-            for ci,(label,fig) in enumerate(dcharts):
+            elems.append(P(f"Dashboard Charts ({len(dcharts)} total — rendered via matplotlib)",h3_s))
+            for ci,(label,_fig) in enumerate(dcharts):
                 elems.append(P(f"{ci+1}. {label}",chap_s))
-                imgs=img_from_fig(fig,w=15*cm,h=7*cm)
-                elems.extend(imgs if imgs else [P("[Chart not embedded — install kaleido]",note_s)])
+                # Pass the label and the raw dataframe — matplotlib renders from data
+                imgs = img_from_fig(label, dd, w=15*cm, h=7*cm)
+                if imgs:
+                    elems.extend(imgs)
+                else:
+                    elems.append(P(f"[Chart could not be rendered for: {label}]",note_s))
                 elems.append(Spacer(1,0.3*cm))
         elems.append(PageBreak())
 
@@ -1617,9 +2020,12 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
                     ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY])]))
                 items.extend([Spacer(1,0.1*cm),kt,Spacer(1,0.2*cm)])
             if e.get("fig"):
-                items.append(P("Chart",h4_s))
-                imgs=img_from_fig(e["fig"],w=14*cm,h=6.5*cm)
-                items.extend(imgs if imgs else [P("[kaleido required]",note_s)])
+                items.append(P("Chart Visualization",h4_s))
+                img = _fig_to_image(e["fig"], RLImage, 13, 6.5, cm)
+                if img:
+                    items.extend([img, Spacer(1,0.2*cm)])
+                else:
+                    items.append(P("[Chart could not be rendered]",note_s))
             if e.get("query_story","").strip():
                 items.append(P("Plain-English Explanation",h4_s))
                 for para in e["query_story"].split("\n\n"):
