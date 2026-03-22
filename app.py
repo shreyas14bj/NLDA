@@ -1115,8 +1115,17 @@ def _check_rl():
     except ImportError: raise RuntimeError("Install reportlab: pip install reportlab")
 
 def _check_kaleido():
-    try: import kaleido; return True
-    except ImportError: return False
+    """Return True only if kaleido can actually render a figure."""
+    try:
+        import plotly.io as pio
+        import plotly.graph_objects as _go
+        # Render a tiny test figure — confirms kaleido binary works
+        _test = _go.Figure(_go.Scatter(x=[1], y=[1]))
+        _bytes = pio.to_image(_test, format="png", width=50, height=50,
+                              scale=1, engine="kaleido")
+        return len(_bytes) > 100
+    except Exception:
+        return False
 
 def _rl_imports():
     from reportlab.lib.pagesizes import A4, landscape
@@ -1132,13 +1141,24 @@ def _rl_imports():
             Table, TableStyle, PageBreak, RLImage, TA_CENTER, TA_LEFT, TA_RIGHT)
 
 def _fig_to_image(fig, rl_image_cls, width_cm=14, height_cm=7, cm_unit=None):
-    """Convert a Plotly figure to a ReportLab Image flowable."""
+    """
+    Convert a Plotly figure to a ReportLab Image flowable.
+    Tries plotly.io.to_image (works with kaleido 0.1.x and 0.2.x).
+    Returns None (not raises) if conversion fails.
+    """
     if fig is None: return None
     try:
-        import kaleido
+        import plotly.io as pio
         cm_ = cm_unit or 1
-        img_bytes = fig.to_image(format="png", width=900, height=500, scale=2)
-        img_io    = io.BytesIO(img_bytes)
+        # Use pio.to_image — works across all kaleido versions
+        img_bytes = pio.to_image(
+            fig, format="png",
+            width=int(width_cm * 96),   # ~96 px per cm at screen resolution
+            height=int(height_cm * 96),
+            scale=2,                    # 2x for crisp print quality
+            engine="kaleido"
+        )
+        img_io = io.BytesIO(img_bytes)
         return rl_image_cls(img_io, width=width_cm*cm_, height=height_cm*cm_)
     except Exception:
         return None
@@ -1377,8 +1397,7 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
                                     PageBreak, Image as RLImage)
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
-    try: import kaleido; HAS_K=True
-    except ImportError: HAS_K=False
+    HAS_K = _check_kaleido()
 
     buf=io.BytesIO()
     doc=SimpleDocTemplate(buf,pagesize=A4,leftMargin=1.8*cm,rightMargin=1.8*cm,
@@ -1410,12 +1429,17 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
               "medium":S("cm",fontSize=9,textColor=AMBER,fontName="Helvetica-Bold",spaceAfter=3),
               "low":   S("cl",fontSize=9,textColor=RED,  fontName="Helvetica-Bold",spaceAfter=3)}
 
-    def img_from_fig(fig,w=15*cm,h=7.5*cm):
+    def img_from_fig(fig, w=15*cm, h=7.5*cm):
         if not HAS_K or fig is None: return []
         try:
-            img_bytes=fig.to_image(format="png",width=1100,height=550,scale=1.5)
-            return [RLImage(io.BytesIO(img_bytes),width=w,height=h),Spacer(1,0.2*cm)]
-        except Exception: return []
+            import plotly.io as pio
+            img_bytes = pio.to_image(
+                fig, format="png",
+                width=int((w/cm)*96), height=int((h/cm)*96),
+                scale=2, engine="kaleido")
+            return [RLImage(io.BytesIO(img_bytes), width=w, height=h), Spacer(1, 0.2*cm)]
+        except Exception:
+            return []
 
     def kpi_row(kpis):
         if not kpis: return []
