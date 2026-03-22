@@ -2902,24 +2902,3 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
 
     doc.build(elems)
     return buf.getvalue()
-
-
-"""
-╔═══════════════════════════════════════════════════════════════════╗
-║  NLDA PRO v5.0 · Elite Data Intelligence Platform                 ║
-║  "The Data Storyteller" — Ultimate Edition                        ║
-╠═══════════════════════════════════════════════════════════════════╣
-║  FIXED in v5.0:                                                   ║
-║  1. Visual Insights — AI-powered mini-charts per insight, smart   ║
-║     column validation, insight quality scoring, trend indicators  ║
-║  2. PDF — rich formatted report with chart images (kaleido),      ║
-║     professional layout, story section, KPI tables               ║
-║  3. Chart Composer — industry preset templates (Sales, Finance,   ║
-║     Marketing, HR, Operations), smart column auto-mapping         ║
-║  4. Storytelling — deep 6-paragraph story of ENTIRE dataset,      ║
-║     not just recent queries. Includes patterns, anomalies,        ║
-║     correlations, seasonal trends, recommendations                ║
-║  5. Per-query story — every single analysis gets its own          ║
-║     mini-narrative explaining what the chart means                ║
-╚═══════════════════════════════════════════════════════════════════╝
-"""
