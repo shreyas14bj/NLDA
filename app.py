@@ -659,6 +659,38 @@ def make_chart(df, chart_type, cfg):
         if y is None or not pd.api.types.is_numeric_dtype(df[y]): y=_best_y(df,y)
         if x is None: x=_best_x(df,x)
 
+    # ── Scatter/bubble MUST have two numeric axes ────────────────────
+    if ct in ("scatter","bubble","density_heatmap"):
+        nc_all = smart_numeric_cols(df)
+        # Ensure x is numeric
+        if x is None or x not in df.columns or not pd.api.types.is_numeric_dtype(df[x]):
+            x = nc_all[0] if len(nc_all) >= 1 else None
+        # Ensure y is numeric AND different from x
+        if y is None or y not in df.columns or not pd.api.types.is_numeric_dtype(df[y]) or y == x:
+            y = next((c for c in nc_all if c != x), None)
+        if x is None or y is None:
+            return None  # genuinely no two numeric cols → don't render at all
+        # Use categorical col as color if available
+        if color is None:
+            cc_all = smart_cat_cols(df)
+            if cc_all: color = cc_all[0]
+
+    # ── Box/violin MUST have a numeric y ─────────────────────────────
+    if ct in ("box","violin","strip"):
+        nc_all = smart_numeric_cols(df)
+        if y is None or y not in df.columns or not pd.api.types.is_numeric_dtype(df[y]):
+            y = nc_all[0] if nc_all else None
+        # x should be categorical
+        cc_all = smart_cat_cols(df)
+        if x is None or x not in df.columns or pd.api.types.is_numeric_dtype(df[x]):
+            x = cc_all[0] if cc_all else None
+        if y is None: return None
+
+    # ── Heatmap MUST have 2+ numeric columns ─────────────────────────
+    if ct in ("heatmap","correlation_matrix"):
+        nc_all = smart_numeric_cols(df)
+        if len(nc_all) < 2: return None
+
     try:
         kw=dict(title=title); fig=None
 
@@ -703,14 +735,30 @@ def make_chart(df, chart_type, cfg):
             fig=px.area(df,x=x,y=y,color=color,
                         color_discrete_map=cmap,color_discrete_sequence=COLORS,**kw)
         elif ct=="scatter":
+            # Both x and y are guaranteed numeric by pre-validation above
+            try:
+                import statsmodels
+                has_sm = True
+            except ImportError:
+                has_sm = False
+            cmap2 = color_map(color) if color else None
             fig=px.scatter(df,x=x,y=y,color=color,size=size,
-                           color_discrete_map=cmap,color_discrete_sequence=COLORS,
-                           color_continuous_scale="Viridis",
-                           trendline="ols" if (not color and x and y) else None,**kw)
-        elif ct=="bubble":
-            fig=px.scatter(df,x=x,y=y,color=color,size=size or y,
+                           color_discrete_map=cmap2,
                            color_discrete_sequence=COLORS,
-                           color_continuous_scale="Plasma",**kw)
+                           color_continuous_scale="Viridis",
+                           trendline="ols" if (has_sm and not color and x and y) else None,
+                           opacity=0.75,**kw)
+            fig.update_traces(marker=dict(size=8,line=dict(width=0.5,color="#0e1117")))
+        elif ct=="bubble":
+            # Both x and y guaranteed numeric
+            cmap2 = color_map(color) if color else None
+            fig=px.scatter(df,x=x,y=y,color=color,
+                           size=size if size and pd.api.types.is_numeric_dtype(df.get(size, pd.Series())) else y,
+                           color_discrete_map=cmap2,
+                           color_discrete_sequence=COLORS,
+                           color_continuous_scale="Plasma",
+                           opacity=0.72,size_max=45,**kw)
+            fig.update_traces(marker=dict(line=dict(width=0.5,color="#0e1117")))
         elif ct=="pie":
             fig=px.pie(df,names=x,values=y,
                        color_discrete_sequence=COLORS,**kw)
@@ -833,7 +881,7 @@ def make_chart(df, chart_type, cfg):
             nx=_best_x(df); ny=_best_y(df)
             if nx and ny:
                 fb=px.bar(df.head(30),x=nx,y=ny,color=nx,
-                          color_discrete_sequence=COLORS,title=f"{title} (fallback)")
+                          color_discrete_sequence=COLORS,title=title or f"{ny} by {nx}")
                 fb.update_layout(**PLOTLY_THEME,title_x=0.)
                 return fb
         except Exception: pass
@@ -1586,24 +1634,63 @@ def _fig_to_image(fig, rl_image_cls, width_cm=14, height_cm=7, cm_unit=None):
                 ax.bar(range(len(ys2)), ys2, label=str(t2.name or ""),
                        color=MPL_COLORS[i%len(MPL_COLORS)], alpha=0.75)
 
-        elif "scatter" in ttype or "line" in ttype:
+        elif "scatter" in ttype:
+            # True scatter — use actual numeric x and y values, not indices
+            for i, tr in enumerate(data):
+                x_vals_raw = list(tr.x or [])
+                y_vals_raw = list(tr.y or [])
+                mode = str(getattr(tr, "mode","markers") or "markers")
+                # Try numeric cast
+                try:
+                    xv = [float(v) for v in x_vals_raw if v is not None]
+                    yv = [float(v) for v in y_vals_raw if v is not None]
+                    if len(xv) != len(yv): xv = xv[:min(len(xv),len(yv))]; yv=yv[:len(xv)]
+                    is_numeric_x = True
+                except (TypeError, ValueError):
+                    xv = list(range(len(y_vals_raw)))
+                    yv = [float(v) if v is not None else 0 for v in y_vals_raw]
+                    is_numeric_x = False
+
+                lw = 1.5 if "lines" in mode else 0
+                ms = 20  if "markers" in mode else 0
+                ax.scatter(xv, yv, color=MPL_COLORS[i%len(MPL_COLORS)],
+                           alpha=0.65, s=ms, edgecolors="none",
+                           label=str(tr.name or ""))
+                if lw > 0:
+                    ax.plot(xv, yv, color=MPL_COLORS[i%len(MPL_COLORS)],
+                            linewidth=lw, alpha=0.6)
+
+            # Trendline for single numeric scatter
+            if len(data) == 1 and is_numeric_x and len(xv) > 3:
+                try:
+                    m, b = np.polyfit(xv, yv, 1)
+                    xs_t = np.linspace(min(xv), max(xv), 80)
+                    ax.plot(xs_t, m*xs_t+b, "--",
+                            color=MPL_COLORS[4], linewidth=1.5, alpha=0.7, label="trend")
+                except Exception:
+                    pass
+
+            ax.set_xlabel(str(getattr(data[0],'xaxis','') or ''), fontsize=8)
+            ax.set_ylabel(str(getattr(data[0],'yaxis','') or ''), fontsize=8)
+            if len(data) > 1: ax.legend(loc="best", fontsize=7, framealpha=0.5)
+
+        elif "line" in ttype:
             for i, tr in enumerate(data):
                 x_vals = list(tr.x or [])
                 y_vals = [float(v) if v is not None else 0 for v in (tr.y or [])]
-                mode   = str(getattr(tr, "mode","lines") or "lines")
-                lw  = 2.0 if "lines" in mode else 0
-                ms  = 5   if "markers" in mode else 0
+                mode = str(getattr(tr, "mode","lines") or "lines")
+                lw = 2.0 if "lines" in mode else 0
+                ms = 5   if "markers" in mode else 0
                 ax.plot(range(len(x_vals)), y_vals,
                         color=MPL_COLORS[i%len(MPL_COLORS)],
                         linewidth=lw, marker="o" if ms else None, markersize=ms,
                         label=str(tr.name or ""), alpha=0.85)
-            # x labels
             xs = list(data[0].x or [])
             step = max(1, len(xs)//7)
             ax.set_xticks(range(0, len(xs), step))
             ax.set_xticklabels([str(xs[i])[:12] for i in range(0,len(xs),step)],
                                rotation=30, ha="right", fontsize=7)
-            if len(data)>1: ax.legend(loc="best", fontsize=7, framealpha=0.5)
+            if len(data) > 1: ax.legend(loc="best", fontsize=7, framealpha=0.5)
 
         elif "pie" in ttype:
             vals   = [float(v) if v is not None else 0 for v in (trace0.values or [])]
@@ -1832,10 +1919,21 @@ def make_pdf(history):
             items.append(P("Key Performance Indicators", styles["h3_s"]))
             items.extend(kpi_table(e["kpis"]))
 
-        # Chart image
-        if e.get("fig"):
+        # Chart image — render directly from result_df for accuracy
+        if e.get("fig") or (e.get("result_df") is not None and not e.get("result_df", pd.DataFrame()).empty):
+            rdf_e = e.get("result_df")
             items.append(P("Chart Visualization", styles["h3_s"]))
-            img = _fig_to_image(e["fig"], RLImage, 13, 6.5, cm)
+            img = None
+            if rdf_e is not None and not rdf_e.empty:
+                ctype = e.get("chart_type","bar") or "bar"
+                ccfg  = e.get("chart_config",{}) or {}
+                lbl   = ccfg.get("title","") or e.get("question","chart")[:50]
+                nc_e  = smart_numeric_cols(rdf_e)
+                cc_e  = smart_cat_cols(rdf_e)
+                dc_e  = [c for c in rdf_e.columns if pd.api.types.is_datetime64_any_dtype(rdf_e[c])]
+                png   = _build_mpl_chart(lbl, rdf_e, nc_e, cc_e, dc_e)
+                if png and len(png) > 200:
+                    img = RLImage(io.BytesIO(png), width=13*cm, height=6.5*cm)
             if img:
                 items.append(img); items.append(Spacer(1,.2*cm))
 
@@ -2121,13 +2219,22 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
                     ("GRID",(0,0),(-1,-1),0.3,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,VIOLET),
                     ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY])]))
                 items.extend([Spacer(1,0.1*cm),kt,Spacer(1,0.2*cm)])
-            if e.get("fig"):
+            if e.get("fig") or (e.get("result_df") is not None and not e.get("result_df", pd.DataFrame()).empty):
                 items.append(P("Chart Visualization",h4_s))
-                img = _fig_to_image(e["fig"], RLImage, 13, 6.5, cm)
-                if img:
-                    items.extend([img, Spacer(1,0.2*cm)])
-                else:
-                    items.append(P("[Chart could not be rendered]",note_s))
+                rdf_e2 = e.get("result_df")
+                img2 = None
+                if rdf_e2 is not None and not rdf_e2.empty:
+                    ctype2 = e.get("chart_type","bar") or "bar"
+                    ccfg2  = e.get("chart_config",{}) or {}
+                    lbl2   = ccfg2.get("title","") or e.get("question","chart")[:50]
+                    nc_e2  = smart_numeric_cols(rdf_e2)
+                    cc_e2  = smart_cat_cols(rdf_e2)
+                    dc_e2  = [c for c in rdf_e2.columns if pd.api.types.is_datetime64_any_dtype(rdf_e2[c])]
+                    png2   = _build_mpl_chart(lbl2, rdf_e2, nc_e2, cc_e2, dc_e2)
+                    if png2 and len(png2) > 200:
+                        img2 = RLImage(io.BytesIO(png2), width=14*cm, height=6.5*cm)
+                if img2:
+                    items.extend([img2, Spacer(1,0.2*cm)])
             if e.get("query_story","").strip():
                 items.append(P("Plain-English Explanation",h4_s))
                 for para in e["query_story"].split("\n\n"):
