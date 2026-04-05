@@ -1463,119 +1463,136 @@ def _mpl_treemap(df, x, y, title):
     return _mpl_to_bytes(fig, plt)
 
 
+def _mpl_violin(df, x, y, title):
+    plt, _ = _mpl_setup()
+    try: df = df.copy(); df[x] = df[x].astype(str)
+    except Exception: pass
+    cats = sorted(df[x].dropna().unique().tolist())
+    data_parts = [df[df[x]==cat][y].dropna().tolist() for cat in cats]
+    valid = [(d,c) for d,c in zip(data_parts, cats) if len(d) >= 3]
+    if not valid: return _mpl_box(df, x, y, title)
+    data_v, labels_v = zip(*valid)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    parts = ax.violinplot(list(data_v), showmeans=True, showmedians=True, widths=0.7)
+    for i, body in enumerate(parts['bodies']):
+        body.set_facecolor(MPL_COLORS[i % len(MPL_COLORS)])
+        body.set_alpha(0.72); body.set_edgecolor('#0e1117')
+    for key in ['cmeans','cmedians','cbars','cmins','cmaxes']:
+        if key in parts:
+            parts[key].set_color('#f0c040')
+            parts[key].set_linewidth(1.5)
+    ax.set_xticks(range(1, len(labels_v)+1))
+    ax.set_xticklabels([str(l)[:12] for l in labels_v], rotation=30, ha='right')
+    ax.set_title(title, pad=10); ax.set_ylabel(y.replace('_',' ').title())
+    fig.tight_layout()
+    return _mpl_to_bytes(fig, plt)
+
+
 def _build_mpl_chart(label, df, nc, cc, dc):
-    """
-    Build a matplotlib PNG for a given chart label using dataset columns.
-    Returns PNG bytes or None. Each chart has its own try/except so one
-    failure never blocks the rest.
-    """
-    # Coerce string cols to native object so groupby / matplotlib work on pandas 2.x
+    """Route chart label to correct matplotlib renderer.
+    Per-call safe() wrappers ensure one failure never blocks another."""
     df = df.copy()
     for c in cc:
         try: df[c] = df[c].astype(str)
         except Exception: pass
-
     t = label
-    try:
-        if "Top Performers" in label:
-            if cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-            elif nc:
-                # numeric-only fallback: histogram
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Trend" in label:
-            if dc and nc:
-                td = df.copy()
-                td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
-                td2 = td.groupby("_p")[nc[0]].sum().reset_index()
-                td2.columns = ["Period", nc[0]]
-                return _mpl_line(td2, "Period", nc[0], t)
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Market Share" in label or "Share" in label or "Donut" in label:
-            if cc and nc:
-                g = df.groupby(cc[0])[nc[0]].sum().reset_index()
-                return _mpl_pie(g, cc[0], nc[0], t, donut=True)
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Scatter" in label or "Correlation Scatter" in label:
-            if len(nc) >= 2:
-                s = df.sample(min(300, len(df)), random_state=42)
-                return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
-            elif nc and cc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-        elif "Correlation Matrix" in label or "Heatmap" in label:
-            if len(nc) >= 2:
-                return _mpl_heatmap(df, nc, t)
-            elif cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-        elif "Box" in label or "Distribution" in label:
-            if cc and nc:
-                return _mpl_box(df, cc[0], nc[0], t)
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Stacked" in label:
-            if len(cc) >= 2 and nc:
-                return _mpl_stacked_bar(df, cc[0], nc[0], cc[1], t)
-            elif cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-        elif "Rankings" in label:
-            if cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t, horizontal=True)
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Multi-Metric" in label:
-            if len(nc) >= 2 and cc:
-                return _mpl_grouped_bar(
-                    df.groupby(cc[0])[nc[:3]].sum().reset_index(),
-                    cc[0], nc[:3], t)
-            elif cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-        elif "Area" in label:
-            if dc and nc:
-                td = df.copy()
-                td["_p"] = pd.to_datetime(td[dc[0]]).dt.to_period("M").astype(str)
-                return _mpl_area(td, "_p", nc[0], cc[0] if cc else None, t)
-            elif cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-        elif "Violin" in label:
-            if cc and nc:
-                return _mpl_box(df, cc[0], nc[0], t)  # box as violin fallback
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Treemap" in label:
-            if cc and nc:
-                return _mpl_treemap(df, cc[0], nc[0], t)
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
-        elif "Histogram" in label:
-            if nc:
-                return _mpl_histogram(df, nc[0], cc[0] if cc else None, t)
-        elif "Bubble" in label:
-            if len(nc) >= 2:
-                s = df.sample(min(200, len(df)), random_state=42)
-                return _mpl_scatter(s, nc[0], nc[1], cc[0] if cc else None, t)
-            elif cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-
-        # ── Universal fallback ────────────────────────────────────────
-        if cc and nc:
-            return _mpl_bar(df, cc[0], nc[0], t)
-        elif len(nc) >= 2:
-            return _mpl_heatmap(df, nc, t)
-        elif nc:
-            return _mpl_histogram(df, nc[0], None, t)
-
-    except Exception:
-        # Last-resort: simple bar or histogram
+    def safe(fn, *a, **kw):
         try:
-            if cc and nc:
-                return _mpl_bar(df, cc[0], nc[0], t)
-            elif nc:
-                return _mpl_histogram(df, nc[0], None, t)
+            r = fn(*a, **kw)
+            return r if r and len(r) > 200 else None
         except Exception:
-            pass
+            return None
+    if 'Top Performers' in label:
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+        if nc:        return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Trend' in label and 'Area' not in label:
+        if dc and nc:
+            try:
+                td = df.copy()
+                td['_p'] = pd.to_datetime(td[dc[0]]).dt.to_period('M').astype(str)
+                td2 = td.groupby('_p')[nc[0]].sum().reset_index()
+                td2.columns = ['Period', nc[0]]
+                r = safe(_mpl_line, td2, 'Period', nc[0], t)
+                if r: return r
+            except Exception: pass
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+        if nc:        return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Market Share' in label or 'Donut' in label:
+        if cc and nc:
+            try:
+                g = df.groupby(cc[0])[nc[0]].sum().reset_index()
+                r = safe(_mpl_pie, g, cc[0], nc[0], t, donut=True)
+                if r: return r
+            except Exception: pass
+        if nc: return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Correlation Scatter' in label:
+        if len(nc) >= 2:
+            s = df.sample(min(300, len(df)), random_state=42)
+            r = safe(_mpl_scatter, s, nc[0], nc[1], cc[0] if cc else None, t)
+            if r: return r
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+    if 'Correlation Matrix' in label:
+        if len(nc) >= 2:
+            r = safe(_mpl_heatmap, df, nc, t)
+            if r: return r
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+    if 'Violin' in label:
+        if cc and nc:
+            r = safe(_mpl_violin, df, cc[0], nc[0], t)
+            if r: return r
+        if nc: return safe(_mpl_histogram, df, nc[0], None, t)
+    if ('Box' in label or 'Distribution' in label) and 'Violin' not in label and 'Histogram' not in label:
+        if cc and nc:
+            r = safe(_mpl_box, df, cc[0], nc[0], t)
+            if r: return r
+        if nc: return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Stacked' in label:
+        if len(cc) >= 2 and nc:
+            r = safe(_mpl_stacked_bar, df, cc[0], nc[0], cc[1], t)
+            if r: return r
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+    if 'Rankings' in label:
+        if cc and nc:
+            r = safe(_mpl_bar, df, cc[0], nc[0], t, horizontal=True)
+            if r: return r
+        if nc: return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Multi-Metric' in label:
+        if len(nc) >= 2 and cc:
+            try:
+                g5 = df.groupby(cc[0])[nc[:3]].sum().reset_index()
+                r = safe(_mpl_grouped_bar, g5, cc[0], nc[:3], t)
+                if r: return r
+            except Exception: pass
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+    if 'Area' in label:
+        if dc and nc:
+            try:
+                td = df.copy()
+                td['_p'] = pd.to_datetime(td[dc[0]]).dt.to_period('M').astype(str)
+                r = safe(_mpl_area, td, '_p', nc[0], cc[0] if cc else None, t)
+                if r: return r
+            except Exception: pass
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+        if nc:        return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Treemap' in label:
+        if cc and nc:
+            r = safe(_mpl_treemap, df, cc[0], nc[0], t)
+            if r: return r
+        if nc: return safe(_mpl_histogram, df, nc[0], None, t)
+    if 'Histogram' in label:
+        if nc: return safe(_mpl_histogram, df, nc[0], cc[0] if cc else None, t)
+    if 'Bubble' in label:
+        if len(nc) >= 2:
+            s = df.sample(min(200, len(df)), random_state=42)
+            r = safe(_mpl_scatter, s, nc[0], nc[1], cc[0] if cc else None, t)
+            if r: return r
+        if cc and nc: return safe(_mpl_bar, df, cc[0], nc[0], t)
+    # universal fallback
+    if cc and nc:    return safe(_mpl_bar, df, cc[0], nc[0], t)
+    if len(nc) >= 2: return safe(_mpl_heatmap, df, nc, t)
+    if nc:           return safe(_mpl_histogram, df, nc[0], None, t)
     return None
+
 
 def _rl_imports():
     from reportlab.lib.pagesizes import A4, landscape
@@ -1919,23 +1936,6 @@ def make_pdf(history):
             items.append(P("Key Performance Indicators", styles["h3_s"]))
             items.extend(kpi_table(e["kpis"]))
 
-        # Chart image — render directly from result_df for accuracy
-        if e.get("fig") or (e.get("result_df") is not None and not e.get("result_df", pd.DataFrame()).empty):
-            rdf_e = e.get("result_df")
-            items.append(P("Chart Visualization", styles["h3_s"]))
-            img = None
-            if rdf_e is not None and not rdf_e.empty:
-                ctype = e.get("chart_type","bar") or "bar"
-                ccfg  = e.get("chart_config",{}) or {}
-                lbl   = ccfg.get("title","") or e.get("question","chart")[:50]
-                nc_e  = smart_numeric_cols(rdf_e)
-                cc_e  = smart_cat_cols(rdf_e)
-                dc_e  = [c for c in rdf_e.columns if pd.api.types.is_datetime64_any_dtype(rdf_e[c])]
-                png   = _build_mpl_chart(lbl, rdf_e, nc_e, cc_e, dc_e)
-                if png and len(png) > 200:
-                    img = RLImage(io.BytesIO(png), width=13*cm, height=6.5*cm)
-            if img:
-                items.append(img); items.append(Spacer(1,.2*cm))
 
         if e.get("query_story","").strip():
             items.append(P("Analysis Story (Plain English)", styles["h3_s"]))
@@ -2032,15 +2032,7 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
         "low":    S("cl", fontSize=9, textColor=RED,   fontName="Helvetica-Bold", spaceAfter=3),
     }
 
-    # Chart image builder using matplotlib — no kaleido required
-    def img_from_fig(label, df_src, w=15*cm, h=7.5*cm):
-        nc2 = smart_numeric_cols(df_src)
-        cc2 = smart_cat_cols(df_src)
-        dc2 = [c for c in df_src.columns if pd.api.types.is_datetime64_any_dtype(df_src[c])]
-        png = _build_mpl_chart(label, df_src, nc2, cc2, dc2)
-        if png and len(png) > 200:
-            return [RLImage(io.BytesIO(png), width=w, height=h), Spacer(1, 0.2*cm)]
-        return []
+    # Chart image builder removed — charts not embedded in PDF
 
     def kpi_row(kpis):
         if not kpis: return []
@@ -2166,16 +2158,9 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
         elems.append(P("Numeric Statistics",h3_s)); elems.extend(stat_table(dd))
         if kpis: elems.append(P("Key Performance Indicators",h3_s)); elems.extend(kpi_row(kpis))
         if dcharts:
-            elems.append(P(f"Dashboard Charts ({len(dcharts)} total — rendered via matplotlib)",h3_s))
+            elems.append(P(f"Dashboard Charts ({len(dcharts)} total)",h3_s))
             for ci,(label,_fig) in enumerate(dcharts):
                 elems.append(P(f"{ci+1}. {label}",chap_s))
-                # Pass the label and the raw dataframe — matplotlib renders from data
-                imgs = img_from_fig(label, dd, w=15*cm, h=7*cm)
-                if imgs:
-                    elems.extend(imgs)
-                else:
-                    elems.append(P(f"[Chart could not be rendered for: {label}]",note_s))
-                elems.append(Spacer(1,0.3*cm))
         elems.append(PageBreak())
 
     # ── PART II: DATA STORY ───────────────────────────────────────────
@@ -2219,22 +2204,6 @@ def make_dashboard_pdf(datasets_dict, dashboard_data_by_name, story_text="", his
                     ("GRID",(0,0),(-1,-1),0.3,MDGRAY),("LINEBELOW",(0,0),(-1,0),1,VIOLET),
                     ("ROWBACKGROUNDS",(0,1),(-1,-1),[WHITE,LTGRAY])]))
                 items.extend([Spacer(1,0.1*cm),kt,Spacer(1,0.2*cm)])
-            if e.get("fig") or (e.get("result_df") is not None and not e.get("result_df", pd.DataFrame()).empty):
-                items.append(P("Chart Visualization",h4_s))
-                rdf_e2 = e.get("result_df")
-                img2 = None
-                if rdf_e2 is not None and not rdf_e2.empty:
-                    ctype2 = e.get("chart_type","bar") or "bar"
-                    ccfg2  = e.get("chart_config",{}) or {}
-                    lbl2   = ccfg2.get("title","") or e.get("question","chart")[:50]
-                    nc_e2  = smart_numeric_cols(rdf_e2)
-                    cc_e2  = smart_cat_cols(rdf_e2)
-                    dc_e2  = [c for c in rdf_e2.columns if pd.api.types.is_datetime64_any_dtype(rdf_e2[c])]
-                    png2   = _build_mpl_chart(lbl2, rdf_e2, nc_e2, cc_e2, dc_e2)
-                    if png2 and len(png2) > 200:
-                        img2 = RLImage(io.BytesIO(png2), width=14*cm, height=6.5*cm)
-                if img2:
-                    items.extend([img2, Spacer(1,0.2*cm)])
             if e.get("query_story","").strip():
                 items.append(P("Plain-English Explanation",h4_s))
                 for para in e["query_story"].split("\n\n"):
@@ -2661,7 +2630,7 @@ with st.sidebar:
 st.markdown("""<div class="hero">
     <div class="hero-grid"></div><div class="hero-glow"></div><div class="hero-glow2"></div><div class="hero-glow3"></div>
     <div class="hero-eye">Business Data Intelligence Platform </div>
-    <h1 class="hero-title">Ask Anything,<br><span>Understand Everything.</span></h1>
+    <h1 class="hero-title">Your data has<br><span>a story to tell.</span></h1>
     <p class="hero-sub">Ask anything in plain English. Get charts, insights, per-query narratives, AI data stories, and professional PDF reports — all in seconds.</p>
     <div class="hero-badges">
         <div class="hb"><div class="dot" style="background:#34d399"></div>25+ chart types</div>
@@ -2863,7 +2832,7 @@ if st.session_state.get("show_autodash"):
             '<div style="font-family:var(--fm);font-size:9px;color:var(--t3);padding:10px 0;line-height:1.6">'
             'Includes: all charts, KPIs, dataset stats, AI story, query appendix.<br>'
             'Includes: all charts, KPIs, dataset stats, AI story, query appendix.<br>'
-            'Charts embedded via matplotlib — no extra packages needed.'
+            'Includes: KPIs, dataset stats, chart list, AI story, query appendix.'
             '</div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
